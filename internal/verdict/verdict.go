@@ -1,12 +1,16 @@
-package main
-
+// Package verdict decides which layer, if any, is making the connection bad.
+//
 // The verdict: which layer, if any, is making the connection bad. Layers are checked from the
 // Mac outward, and when two layers are equally bad the one closer to the Mac is named, because
 // a fault near the Mac shows up in everything past it.
+package verdict
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/cleonte/menubar/packet-go/internal/num"
+	"github.com/cleonte/menubar/packet-go/internal/probe"
 )
 
 type Level int
@@ -71,7 +75,7 @@ func (v Verdict) JSON() map[string]any {
 }
 
 // storedVerdict is the verdict a stored round was given.
-func storedVerdict(level, at int64) Verdict {
+func StoredVerdict(level, at int64) Verdict {
 	l, w := levelFrom(level), whereFrom(at)
 	s := "Network was healthy."
 	if l != Good {
@@ -91,7 +95,7 @@ func atLeast(v, t float64) bool { return v >= t-1e-9 }
 
 // settle: one bad round is often a single lost ping. The verdict changes to Fair or Poor only
 // when the round before was also bad; going offline, and getting better, show at once.
-func settle(raw Verdict, prev *Verdict) Verdict {
+func Settle(raw Verdict, prev *Verdict) Verdict {
 	held := (raw.Level == Fair || raw.Level == Poor) && (prev == nil || prev.Level == Good)
 	if !held {
 		return raw
@@ -99,7 +103,7 @@ func settle(raw Verdict, prev *Verdict) Verdict {
 	return Verdict{Good, Nowhere, fmt.Sprintf("Network is healthy. One round just now looked off (%s); watching the next.", strings.ToLower(raw.At.Label()))}
 }
 
-func fmtMs(v float64) string {
+func FmtMs(v float64) string {
 	if v < 10 {
 		return fmt.Sprintf("%.1f ms", v)
 	}
@@ -109,8 +113,8 @@ func fmtMs(v float64) string {
 func fmtPct(v float64) string { return fmt.Sprintf("%.0f%%", v*100) }
 
 // localFinding: the router, plus Wi-Fi signal when on Wi-Fi.
-func localFinding(r *Round) Finding {
-	wifi := r.Link == LinkWiFi
+func localFinding(r *probe.Round) Finding {
+	wifi := r.Link == probe.LinkWiFi
 	at := WhereLocal
 	if wifi {
 		at = WhereWiFi
@@ -136,7 +140,7 @@ func localFinding(r *Round) Finding {
 		}
 	}
 	// A VPN's "router" is the far end of the tunnel, so it gets Wi-Fi-like slack on latency.
-	relaxed := wifi || r.Link == LinkOther
+	relaxed := wifi || r.Link == probe.LinkOther
 	fairMs, poorMs := 10.0, 50.0
 	if relaxed {
 		fairMs, poorMs = 40, 100
@@ -146,7 +150,7 @@ func localFinding(r *Round) Finding {
 	// A router that answers no pings tells us nothing; only one that answers badly is a finding.
 	if r.Gateway.Ms != nil {
 		g := r.Gateway
-		gms, loss, jitter := *g.Ms, val(g.Loss, 0), val(g.Jitter, 0)
+		gms, loss, jitter := *g.Ms, num.Val(g.Loss, 0), num.Val(g.Jitter, 0)
 		l := Good
 		switch {
 		case gms > poorMs || atLeast(loss, poorLoss):
@@ -156,17 +160,17 @@ func localFinding(r *Round) Finding {
 		}
 		if l > Good {
 			via := "router"
-			if r.Link == LinkOther {
+			if r.Link == probe.LinkOther {
 				via = "VPN gateway"
 			}
-			why = append(why, fmt.Sprintf("%s %s with %s loss", via, fmtMs(gms), fmtPct(loss)))
+			why = append(why, fmt.Sprintf("%s %s with %s loss", via, FmtMs(gms), fmtPct(loss)))
 		}
 		level = max(level, l)
 	}
 	return Finding{level, at, strings.Join(why, ", ")}
 }
 
-func ispFinding(r *Round, b Baseline, lastDown *float64) Finding {
+func ispFinding(r *probe.Round, b Baseline, lastDown *float64) Finding {
 	at := WhereIsp
 	if r.Edge.Ms == nil {
 		// Some networks block 1.1.1.1. If the far regions still answer, the line itself works.
@@ -176,8 +180,8 @@ func ispFinding(r *Round, b Baseline, lastDown *float64) Finding {
 		return Finding{Poor, at, "Cloudflare's edge is unreachable"}
 	}
 	e := *r.Edge.Ms
-	base := val(b.EdgeMs, 20)
-	loss, jitter := val(r.Edge.Loss, 0), val(r.Edge.Jitter, 0)
+	base := num.Val(b.EdgeMs, 20)
+	loss, jitter := num.Val(r.Edge.Loss, 0), num.Val(r.Edge.Jitter, 0)
 	level := Good
 	switch {
 	case atLeast(loss, 0.4) || e > max(4*base, 150):
@@ -187,7 +191,7 @@ func ispFinding(r *Round, b Baseline, lastDown *float64) Finding {
 	}
 	detail := ""
 	if level > Good {
-		detail = fmt.Sprintf("edge %s with %s loss", fmtMs(e), fmtPct(loss))
+		detail = fmt.Sprintf("edge %s with %s loss", FmtMs(e), fmtPct(loss))
 	}
 	if lastDown != nil && b.DownMbps != nil && *lastDown < 0.25**b.DownMbps {
 		level = max(level, Fair)
@@ -199,20 +203,20 @@ func ispFinding(r *Round, b Baseline, lastDown *float64) Finding {
 	return Finding{level, at, detail}
 }
 
-func dnsFinding(r *Round, b Baseline) Finding {
+func dnsFinding(r *probe.Round, b Baseline) Finding {
 	at := WhereDns
 	switch d := r.DnsMs; {
 	case d == nil:
 		return Finding{Poor, at, "lookups are failing"}
 	case *d > 300:
-		return Finding{Poor, at, "lookups take " + fmtMs(*d)}
-	case *d > 100 && *d > 3*val(b.DnsMs, 10):
-		return Finding{Fair, at, "lookups take " + fmtMs(*d)}
+		return Finding{Poor, at, "lookups take " + FmtMs(*d)}
+	case *d > 100 && *d > 3*num.Val(b.DnsMs, 10):
+		return Finding{Fair, at, "lookups take " + FmtMs(*d)}
 	}
 	return Finding{Good, at, ""}
 }
 
-func farFinding(r *Round, b Baseline) Finding {
+func farFinding(r *probe.Round, b Baseline) Finding {
 	at := WhereFar
 	n := len(r.Regions)
 	down := n - r.RegionsUp()
@@ -232,24 +236,24 @@ func farFinding(r *Round, b Baseline) Finding {
 }
 
 // findings: each layer from the Mac outward: local link, internet provider, DNS, far internet.
-func findings(r *Round, b Baseline, lastDown *float64) [4]Finding {
+func Findings(r *probe.Round, b Baseline, lastDown *float64) [4]Finding {
 	return [4]Finding{localFinding(r), ispFinding(r, b, lastDown), dnsFinding(r, b), farFinding(r, b)}
 }
 
-func judge(r *Round, b Baseline, lastDown *float64) Verdict {
-	if r.Link == LinkNone {
+func Judge(r *probe.Round, b Baseline, lastDown *float64) Verdict {
+	if r.Link == probe.LinkNone {
 		return Verdict{Offline, WhereLocal, "Offline: no network connection."}
 	}
 	if r.Edge.Ms == nil && r.RegionsUp() == 0 {
 		switch {
 		case r.Gateway.Ms != nil:
 			return Verdict{Offline, WhereIsp, "Offline: your router answers, but nothing past it does."}
-		case r.Link == LinkWiFi:
+		case r.Link == probe.LinkWiFi:
 			return Verdict{Offline, WhereWiFi, "Offline: connected to Wi-Fi, but nothing answers."}
 		}
 		return Verdict{Offline, WhereLocal, "Offline: nothing answers past this Mac."}
 	}
-	fs := findings(r, b, lastDown)
+	fs := Findings(r, b, lastDown)
 	worst := Good
 	for _, f := range fs {
 		worst = max(worst, f.Level)

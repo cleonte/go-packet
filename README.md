@@ -11,9 +11,32 @@ It has no tray icon or window of its own: `packet daemon` serves a localhost API
 ## Build
 
 ```bash
-make build     # ./packet
-make test      # go test -race
+make build     # bin/packet
+make test      # go vet + go test -race
+make install   # also copies the CLI to ~/.local/bin
 ```
+
+## Layout
+
+Follows the usual Go project layout (`cmd/` for binaries, `internal/` for packages):
+
+```
+cmd/packet/          the binary: CLI commands and the daemon entry point
+internal/probe/      measurements: link, ICMP, DNS, TCP, bandwidth, one round (+ CoreWLAN/Network bridges)
+internal/verdict/    which layer is to blame, and the plain-words sentence
+internal/store/      the SQLite database, baselines
+internal/sampler/    the minute loop and the bandwidth schedule
+internal/report/     plain-words rows and JSON for the CLI and API
+internal/history/    bucketed history for charts
+internal/server/     the localhost API and history page
+internal/agent/      launchd user agent (optional)
+internal/clock/      time helpers and the `packet at` parser
+internal/num/        helpers for optional numbers
+```
+
+Dependencies point one way: `probe` knows nothing of `verdict`, `verdict` nothing of `store`, and
+so on up to `cmd/packet`. Tests sit beside the code; `internal/probe/probetest` has the shared
+fixture.
 
 CGO is used for two small Objective-C bridges (`native_darwin.m`): CoreWLAN for Wi-Fi signal, and
 Network.framework for expensive/constrained paths. Everything else is pure Go; SQLite is

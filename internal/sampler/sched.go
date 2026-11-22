@@ -1,10 +1,14 @@
-package main
+package sampler
 
 // When a bandwidth test runs. Test Now always runs; these decide the automatic ones.
 
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/cleonte/menubar/packet-go/internal/probe"
+	"github.com/cleonte/menubar/packet-go/internal/store"
+	"github.com/cleonte/menubar/packet-go/internal/verdict"
 )
 
 const (
@@ -17,14 +21,14 @@ const (
 
 // The hourly full test moves about 3.4 GB a day, so it runs only after the person turns it on.
 // The setting is a marker file in the data folder.
-func hourlyEnabled() bool { return hourlyEnabledIn(dataDir()) }
+func HourlyEnabled() bool { return hourlyEnabledIn(store.DataDir()) }
 
 func hourlyEnabledIn(dir string) bool {
 	fi, err := os.Lstat(filepath.Join(dir, hourlyMarker))
 	return err == nil && fi.Mode().IsRegular()
 }
 
-func setHourly(on bool) error { return setHourlyIn(dataDir(), on) }
+func SetHourly(on bool) error { return setHourlyIn(store.DataDir(), on) }
 
 func setHourlyIn(dir string, on bool) error {
 	path := filepath.Join(dir, hourlyMarker)
@@ -57,8 +61,8 @@ func setHourlyIn(dir string, on bool) error {
 // test counts as a check too); lastFull the last hourly or Test Now run. A bad round pulls a
 // check forward only when the network has just turned bad (prev was Good): a network that stays
 // weak is not tested every few minutes, which would load it exactly when it is struggling.
-func bandwidthDue(now int64, lastQuick, lastFull *int64, level, prev Level, expensive, hourly bool) (Trigger, bool) {
-	if expensive || level == Offline {
+func bandwidthDue(now int64, lastQuick, lastFull *int64, level, prev verdict.Level, expensive, hourly bool) (probe.Trigger, bool) {
+	if expensive || level == verdict.Offline {
 		return 0, false
 	}
 	since := func(t *int64) int64 {
@@ -69,11 +73,11 @@ func bandwidthDue(now int64, lastQuick, lastFull *int64, level, prev Level, expe
 	}
 	switch {
 	case hourly && since(lastFull) >= fullEveryMs:
-		return TrigHourly, true
+		return probe.TrigHourly, true
 	case since(lastQuick) >= quickEveryMs:
-		return TrigScheduled, true
-	case level >= Fair && prev == Good && since(lastQuick) >= badRoundMinGap:
-		return TrigBadRound, true
+		return probe.TrigScheduled, true
+	case level >= verdict.Fair && prev == verdict.Good && since(lastQuick) >= badRoundMinGap:
+		return probe.TrigBadRound, true
 	}
 	return 0, false
 }

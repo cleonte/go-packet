@@ -1,4 +1,4 @@
-package main
+package probe
 
 /*
 #cgo CFLAGS: -fobjc-arc
@@ -42,4 +42,4 @@ func pathState() (bool, bool) {
 }
 
 // pathStart begins watching the network path early, so the first round has an answer.
-func pathStart() { C.packet_path_start() }
+func PathStart() { C.packet_path_start() }

@@ -1,6 +1,7 @@
-package main
-
+// Package probe measures the connection: link, ICMP, DNS, TCP and bandwidth.
+//
 // Measurements. Every host Packet talks to is named in this file.
+package probe
 
 import (
 	"context"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -141,7 +143,7 @@ func (p PingStats) Loss() *float64 {
 	v := 1 - float64(len(p.Rtts))/float64(p.Sent)
 	return &v
 }
-func (p PingStats) Median() *float64 { return median(p.Rtts) }
+func (p PingStats) Median() *float64 { return Median(p.Rtts) }
 
 // Jitter is the mean absolute difference between consecutive replies.
 func (p PingStats) Jitter() *float64 {
@@ -160,7 +162,7 @@ func (p PingStats) Jitter() *float64 {
 	return &v
 }
 
-func median(v []float64) *float64 {
+func Median(v []float64) *float64 {
 	if len(v) == 0 {
 		return nil
 	}
@@ -291,7 +293,7 @@ func connectMs(host string, tries int, timeout time.Duration) *float64 {
 
 func connectAddrMs(ip net.IP, port, tries int, timeout time.Duration) *float64 {
 	var best *float64
-	addr := net.JoinHostPort(ip.String(), itoa(port))
+	addr := net.JoinHostPort(ip.String(), strconv.Itoa(port))
 	for i := 0; i < tries; i++ {
 		t := time.Now()
 		c, err := net.DialTimeout("tcp4", addr, timeout)
@@ -539,7 +541,7 @@ func runStreams(c Caps, upload bool) (res []streamResult, total int64) {
 				}
 				n = cr.n
 			} else {
-				req, _ := http.NewRequestWithContext(ctx, "GET", downURL+itoa64(c.DownBytes), nil)
+				req, _ := http.NewRequestWithContext(ctx, "GET", downURL+strconv.FormatInt(c.DownBytes, 10), nil)
 				resp, err := http.DefaultClient.Do(req)
 				if err != nil {
 					return
@@ -561,7 +563,7 @@ func runStreams(c Caps, upload bool) (res []streamResult, total int64) {
 	return
 }
 
-func measureBandwidth(t Trigger, nowMs int64) Bandwidth {
+func MeasureBandwidth(t Trigger, nowMs int64) Bandwidth {
 	if t == TrigManual {
 		exp, con := pathState()
 		if !(exp || con) {
@@ -613,7 +615,7 @@ func parseNetworkQuality(js string, atMs int64) *Bandwidth {
 func networkQuality(nowMs int64) *Bandwidth {
 	ctx, cancel := context.WithTimeout(context.Background(), nqKillSecs*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "/usr/bin/networkQuality", "-c", "-M", itoa(nqMaxSecs)).Output()
+	out, err := exec.CommandContext(ctx, "/usr/bin/networkQuality", "-c", "-M", strconv.Itoa(nqMaxSecs)).Output()
 	if err != nil {
 		return nil
 	}
@@ -621,7 +623,7 @@ func networkQuality(nowMs int64) *Bandwidth {
 }
 
 // rpmLabel puts responsiveness in words. The cut-offs are Packet's own, not Apple's.
-func rpmLabel(rpm float64) string {
+func RpmLabel(rpm float64) string {
 	switch {
 	case rpm >= 800:
 		return "High"

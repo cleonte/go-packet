@@ -1,40 +1,22 @@
-package main
+// Package clock has Packet's time helpers: millisecond timestamps, plain-words ages and the
+// forgiving parser behind `packet at`.
+package clock
 
 import (
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
 )
 
-func itoa(n int) string     { return strconv.Itoa(n) }
-func itoa64(n int64) string { return strconv.FormatInt(n, 10) }
+func NowMs() int64 { return time.Now().UnixMilli() }
 
-func fp(v float64) *float64 { return &v }
+func ISOLocal(ms int64) string { return time.UnixMilli(ms).Format("2006-01-02T15:04:05-07:00") }
 
-// val dereferences an optional number, with a default for None.
-func val(p *float64, def float64) float64 {
-	if p == nil {
-		return def
-	}
-	return *p
-}
-
-func round1(p *float64) any {
-	if p == nil {
-		return nil
-	}
-	return math.Round(*p*10) / 10
-}
-
-func nowMs() int64 { return time.Now().UnixMilli() }
-
-func isoLocal(ms int64) string { return time.UnixMilli(ms).Format("2006-01-02T15:04:05-07:00") }
-func hhmm(ms int64) string     { return time.UnixMilli(ms).Format("15:04") }
+func HHMM(ms int64) string { return time.UnixMilli(ms).Format("15:04") }
 
 // ago: "just now", "4 min ago", "2 h ago".
-func ago(now, then int64) string {
+func Ago(now, then int64) string {
 	s := max(now-then, 0) / 1000
 	switch {
 	case s < 60:
@@ -57,7 +39,7 @@ func hm(s string) (int, int, bool) {
 
 // parseWhen parses `14:30` (the most recent past 14:30), `2026-10-12 14:30`, `2026-10-12T14:30`,
 // `30m` / `2h` / `3d` (ago), or epoch milliseconds.
-func parseWhen(s string, now int64) (int64, bool) {
+func ParseWhen(s string, now int64) (int64, bool) {
 	s = trimSuffix(trim(s), " ago")
 	if n, ok := suffixInt(s, "m"); ok {
 		return now - n*60_000, true
@@ -91,9 +73,11 @@ func parseWhen(s string, now int64) (int64, bool) {
 	return 0, false
 }
 
-func trim(s string) string            { return strings.TrimSpace(s) }
+func trim(s string) string { return strings.TrimSpace(s) }
+
 func trimSuffix(s, suf string) string { return strings.TrimSuffix(s, suf) }
-func contains(s, sub string) bool     { return strings.Contains(s, sub) }
+
+func contains(s, sub string) bool { return strings.Contains(s, sub) }
 
 func suffixInt(s, suf string) (int64, bool) {
 	if len(s) <= len(suf) || s[len(s)-len(suf):] != suf {

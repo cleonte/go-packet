@@ -1,4 +1,4 @@
-// Packet (Go): is it the network? Measures each layer of the connection every minute and says
+// Command packet: is it the network? Measures each layer of the connection every minute and says
 // which one is to blame. `packet daemon` runs the measuring loop and a localhost API that CLBar
 // reads; the other subcommands answer from the command line.
 //
@@ -16,6 +16,16 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/cleonte/menubar/packet-go/internal/agent"
+	"github.com/cleonte/menubar/packet-go/internal/clock"
+	"github.com/cleonte/menubar/packet-go/internal/history"
+	"github.com/cleonte/menubar/packet-go/internal/probe"
+	"github.com/cleonte/menubar/packet-go/internal/report"
+	"github.com/cleonte/menubar/packet-go/internal/sampler"
+	"github.com/cleonte/menubar/packet-go/internal/server"
+	"github.com/cleonte/menubar/packet-go/internal/store"
+	"github.com/cleonte/menubar/packet-go/internal/verdict"
 )
 
 const help = `packet — is it the network?
@@ -58,7 +68,7 @@ func main() {
 	case "daemon":
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		if err := runDaemon(ctx); err != nil {
+		if err := server.Run(ctx); err != nil {
 			fmt.Fprintln(os.Stderr, "packet:", err)
 			code = 1
 		}
@@ -85,7 +95,7 @@ func main() {
 				rng = rest[i+1]
 			}
 		}
-		if _, ok := rangeMs(rng); !ok {
+		if _, ok := history.RangeMs(rng); !ok {
 			fmt.Fprintf(os.Stderr, "unknown range %q\n\n%s\n", rng, help)
 			code = 2
 		} else {
@@ -95,14 +105,14 @@ func main() {
 		if len(rest) < 2 || (rest[1] != "on" && rest[1] != "off") {
 			fmt.Fprintf(os.Stderr, "hourly needs on or off\n")
 			code = 2
-		} else if err := setHourly(rest[1] == "on"); err != nil {
+		} else if err := sampler.SetHourly(rest[1] == "on"); err != nil {
 			fmt.Fprintln(os.Stderr, "packet:", err)
 			code = 1
 		} else {
 			fmt.Println("hourly line-speed test:", rest[1])
 		}
 	case "agent":
-		code = cmdAgent(rest[1:])
+		code = agent.CmdAgent(rest[1:])
 	case "help", "--help", "-h":
 		fmt.Println(help)
 	default:
@@ -112,14 +122,14 @@ func main() {
 	os.Exit(code)
 }
 
-func printText(s Snapshot, now int64) {
+func printText(s sampler.Snapshot, now int64) {
 	fmt.Printf("%s %s\n\n", s.Verdict.Level.Mark(), s.Verdict.Sentence)
-	fmt.Printf("  %s %s\n", s.Findings[0].Level.Mark(), linkRow(s.Round))
-	fmt.Printf("  %s %s\n", s.Findings[1].Level.Mark(), edgeRow(s.Round))
-	fmt.Printf("  %s %s\n", s.Findings[2].Level.Mark(), dnsRow(s.Round))
-	fmt.Printf("  %s %s\n", s.Findings[3].Level.Mark(), worldRow(s.Round))
-	fmt.Printf("       %s\n", regionLine(s.Round))
-	fmt.Printf("  %s\n", bandwidthRow(s.Full, now))
+	fmt.Printf("  %s %s\n", s.Findings[0].Level.Mark(), report.LinkRow(s.Round))
+	fmt.Printf("  %s %s\n", s.Findings[1].Level.Mark(), report.EdgeRow(s.Round))
+	fmt.Printf("  %s %s\n", s.Findings[2].Level.Mark(), report.DnsRow(s.Round))
+	fmt.Printf("  %s %s\n", s.Findings[3].Level.Mark(), report.WorldRow(s.Round))
+	fmt.Printf("       %s\n", report.RegionLine(s.Round))
+	fmt.Printf("  %s\n", report.BandwidthRow(s.Full, now))
 }
 
 func printJSON(v any) {
@@ -128,81 +138,81 @@ func printJSON(v any) {
 }
 
 func cmdNow(jsonOut, full bool) int {
-	at := nowMs()
-	db, _ := openStore()
-	var base Baseline
+	at := clock.NowMs()
+	db, _ := store.OpenStore()
+	var base verdict.Baseline
 	var recent *float64
-	var bw *Bandwidth
+	var bw *probe.Bandwidth
 	if db != nil {
 		defer db.Close()
-		base, recent, bw = loadBaseline(db, at), recentScheduledDown(db, at), latestFull(db)
+		base, recent, bw = store.LoadBaseline(db, at), store.RecentScheduledDown(db, at), store.LatestFull(db)
 	}
-	r := runRound(at, uint64(at/60_000))
+	r := probe.RunRound(at, uint64(at/60_000))
 	if full {
-		b := measureBandwidth(TrigManual, nowMs())
+		b := probe.MeasureBandwidth(probe.TrigManual, clock.NowMs())
 		bw = &b
 	}
-	v, fs := judge(r, base, recent), findings(r, base, recent)
-	s := Snapshot{Round: r, Verdict: v, Findings: fs, Full: bw}
+	v, fs := verdict.Judge(r, base, recent), verdict.Findings(r, base, recent)
+	s := sampler.Snapshot{Round: r, Verdict: v, Findings: fs, Full: bw}
 	if jsonOut {
-		printJSON(snapshotJSON(s, nowMs()))
+		printJSON(report.SnapshotJSON(s, clock.NowMs()))
 	} else {
-		printText(s, nowMs())
+		printText(s, clock.NowMs())
 	}
 	return 0
 }
 
 func cmdAt(when string, jsonOut bool) (int, bool) {
-	now := nowMs()
-	t, ok := parseWhen(when, now)
+	now := clock.NowMs()
+	t, ok := clock.ParseWhen(when, now)
 	if !ok {
 		return 0, false
 	}
-	db, err := openStore()
+	db, err := store.OpenStore()
 	if err != nil {
 		return 1, true
 	}
 	defer db.Close()
-	s, _ := nearestRound(db, t, 5*60_000)
+	s, _ := store.NearestRound(db, t, 5*60_000)
 	if s == nil {
 		if jsonOut {
-			printJSON(map[string]any{"asked": isoLocal(t), "found": false})
+			printJSON(map[string]any{"asked": clock.ISOLocal(t), "found": false})
 		} else {
-			fmt.Printf("No measurement within 5 minutes of %s.\n", isoLocal(t))
+			fmt.Printf("No measurement within 5 minutes of %s.\n", clock.ISOLocal(t))
 		}
 		return 1, true
 	}
-	around, _ := roundsBetween(db, t-10*60_000, t+10*60_000)
-	bad, worst := 0, Good
+	around, _ := store.RoundsBetween(db, t-10*60_000, t+10*60_000)
+	bad, worst := 0, verdict.Good
 	for _, x := range around {
-		if x.Verdict.Level >= Fair {
+		if x.Verdict.Level >= verdict.Fair {
 			bad++
 		}
 		worst = max(worst, x.Verdict.Level)
 	}
-	bw := nearestBandwidth(db, t, 15*60_000)
-	fs := findings(s.Round, loadBaseline(db, t), nil)
+	bw := store.NearestBandwidth(db, t, 15*60_000)
+	fs := verdict.Findings(s.Round, store.LoadBaseline(db, t), nil)
 	if jsonOut {
-		out := s.Round.JSON(s.Verdict)
-		out["asked"], out["found"] = isoLocal(t), true
+		out := report.RoundJSON(s.Round, s.Verdict)
+		out["asked"], out["found"] = clock.ISOLocal(t), true
 		out["window"] = map[string]any{"minutes": 20, "rounds": len(around), "bad_rounds": bad, "worst": worst.Slug()}
-		out["bandwidth"] = bwJSON(bw)
+		out["bandwidth"] = report.BwJSON(bw)
 		printJSON(out)
 		return 0, true
 	}
-	fmt.Printf("At %s (nearest measurement %s):\n", hhmm(t), hhmm(s.Round.AtMs))
-	printText(Snapshot{Round: s.Round, Verdict: s.Verdict, Findings: fs, Full: bw}, now)
+	fmt.Printf("At %s (nearest measurement %s):\n", clock.HHMM(t), clock.HHMM(s.Round.AtMs))
+	printText(sampler.Snapshot{Round: s.Round, Verdict: s.Verdict, Findings: fs, Full: bw}, now)
 	fmt.Printf("\n  ±10 min: %d of %d rounds were fair or worse (worst: %s).\n", bad, len(around), worst.Slug())
 	return 0, true
 }
 
 func cmdHistory(rng string, jsonOut bool) int {
-	db, err := openStore()
+	db, err := store.OpenStore()
 	if err != nil {
 		return 1
 	}
 	defer db.Close()
-	h, err := buildHistory(db, rng, nowMs())
+	h, err := history.Build(db, rng, clock.NowMs())
 	if err != nil {
 		return 1
 	}
@@ -214,7 +224,7 @@ func cmdHistory(rng string, jsonOut bool) int {
 	fmt.Printf("Last %s: %v rounds, %v fair or worse.\n", rng, h["rounds"], h["bad_rounds"])
 	for _, b := range h["buckets"].([]map[string]any) {
 		if b["level"] != "good" {
-			fmt.Printf("  %s  %-8s %s\n", hhmm(b["t"].(int64)), b["level"], b["layer"])
+			fmt.Printf("  %s  %-8s %s\n", clock.HHMM(b["t"].(int64)), b["level"], b["layer"])
 		}
 	}
 	return 0
@@ -223,7 +233,7 @@ func cmdHistory(rng string, jsonOut bool) int {
 // cmdStatus asks the running daemon.
 func cmdStatus(jsonOut bool) int {
 	c := &http.Client{Timeout: 3 * time.Second}
-	resp, err := c.Get("http://" + listenAddr() + "/v1/status")
+	resp, err := c.Get("http://" + server.ListenAddr() + "/v1/status")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "no daemon answering; start it with `packet daemon` (or `packet agent install`)")
 		return 1

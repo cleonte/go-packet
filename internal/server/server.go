@@ -1,5 +1,5 @@
-package main
-
+// Package server runs the daemon: the measuring loop plus a localhost-only API.
+//
 // The daemon's local API. It listens on 127.0.0.1 only; CLBar (or curl) reads it.
 //
 //	GET  /                     history page (open in a browser)
@@ -11,6 +11,7 @@ package main
 //
 // Writes need a custom header, which a web page cannot send cross-origin without a preflight we
 // never answer, and the Host header must be loopback, which defeats DNS rebinding.
+package server
 
 import (
 	"context"
@@ -22,14 +23,21 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/cleonte/menubar/packet-go/internal/clock"
+	"github.com/cleonte/menubar/packet-go/internal/history"
+	"github.com/cleonte/menubar/packet-go/internal/probe"
+	"github.com/cleonte/menubar/packet-go/internal/report"
+	"github.com/cleonte/menubar/packet-go/internal/sampler"
+	"github.com/cleonte/menubar/packet-go/internal/store"
 )
 
 const defaultPort = "47831"
 
-//go:embed history.html
+//go:embed web/history.html
 var historyPage []byte
 
-func listenAddr() string {
+func ListenAddr() string {
 	p := os.Getenv("PACKET_PORT")
 	if p == "" {
 		p = defaultPort
@@ -41,13 +49,13 @@ type Server struct {
 	db      *sql.DB
 	testNow chan struct{}
 	mu      sync.RWMutex
-	snap    *Snapshot
+	snap    *sampler.Snapshot
 	snapAt  int64
 }
 
-func (s *Server) notify(sn Snapshot) {
+func (s *Server) notify(sn sampler.Snapshot) {
 	s.mu.Lock()
-	s.snap, s.snapAt = &sn, nowMs()
+	s.snap, s.snapAt = &sn, clock.NowMs()
 	s.mu.Unlock()
 }
 
@@ -79,10 +87,10 @@ func (s *Server) handler() http.Handler {
 			writeJSON(w, 200, map[string]any{"ready": false})
 			return
 		}
-		out := snapshotJSON(*sn, nowMs())
+		out := report.SnapshotJSON(*sn, clock.NowMs())
 		out["ready"] = true
 		out["updated_ms"] = at
-		out["hourly_test"] = hourlyEnabled()
+		out["hourly_test"] = sampler.HourlyEnabled()
 		writeJSON(w, 200, out)
 	})
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
@@ -95,11 +103,11 @@ func (s *Server) handler() http.Handler {
 		if rng == "" {
 			rng = "24h"
 		}
-		if _, ok := rangeMs(rng); !ok {
+		if _, ok := history.RangeMs(rng); !ok {
 			writeJSON(w, 400, map[string]any{"error": "range must be 1h, 24h, 7d or 30d"})
 			return
 		}
-		h, err := buildHistory(s.db, rng, nowMs())
+		h, err := history.Build(s.db, rng, clock.NowMs())
 		if err != nil {
 			writeJSON(w, 500, map[string]any{"error": "history unavailable"})
 			return
@@ -128,11 +136,11 @@ func (s *Server) handler() http.Handler {
 			writeJSON(w, 400, map[string]any{"error": "on must be 1 or 0"})
 			return
 		}
-		if err := setHourly(on == "1"); err != nil {
+		if err := sampler.SetHourly(on == "1"); err != nil {
 			writeJSON(w, 500, map[string]any{"error": "could not change the setting"})
 			return
 		}
-		writeJSON(w, 200, map[string]any{"hourly_test": hourlyEnabled()})
+		writeJSON(w, 200, map[string]any{"hourly_test": sampler.HourlyEnabled()})
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !loopbackHost(r) {
@@ -144,21 +152,21 @@ func (s *Server) handler() http.Handler {
 }
 
 // runDaemon measures forever and serves the API until ctx ends.
-func runDaemon(ctx context.Context) error {
-	db, err := openStore()
+func Run(ctx context.Context) error {
+	db, err := store.OpenStore()
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 	s := &Server{db: db, testNow: make(chan struct{}, 1)}
-	ln, err := net.Listen("tcp4", listenAddr())
+	ln, err := net.Listen("tcp4", ListenAddr())
 	if err != nil {
 		return err
 	}
 	srv := &http.Server{Handler: s.handler(), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
-	pathStart()
-	runSampler(ctx, db, s.testNow, s.notify)
+	probe.PathStart()
+	sampler.Run(ctx, db, s.testNow, s.notify)
 	shutdown, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdown)

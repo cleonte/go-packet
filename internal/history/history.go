@@ -1,10 +1,14 @@
-package main
-
-// History for `packet history` and the daemon: rounds bucketed to a few hundred points.
+// Package history buckets stored rounds for `packet history` and the history page. history for `packet history` and the daemon: rounds bucketed to a few hundred points.
+package history
 
 import (
 	"database/sql"
 	"math"
+
+	"github.com/cleonte/menubar/packet-go/internal/num"
+	"github.com/cleonte/menubar/packet-go/internal/probe"
+	"github.com/cleonte/menubar/packet-go/internal/store"
+	"github.com/cleonte/menubar/packet-go/internal/verdict"
 )
 
 var ranges = []struct {
@@ -14,7 +18,7 @@ var ranges = []struct {
 
 const targetPoints = 360
 
-func rangeMs(name string) (int64, bool) {
+func RangeMs(name string) (int64, bool) {
 	for _, r := range ranges {
 		if r.Name == name {
 			return r.Ms, true
@@ -36,8 +40,8 @@ func mean(v []float64) *float64 {
 }
 
 // predominant is the link most of a bucket's rounds were on; a tie goes to the later one.
-func predominant(links []LinkKind) LinkKind {
-	count := map[LinkKind]int{}
+func predominant(links []probe.LinkKind) probe.LinkKind {
+	count := map[probe.LinkKind]int{}
 	for _, l := range links {
 		count[l]++
 	}
@@ -50,7 +54,7 @@ func predominant(links []LinkKind) LinkKind {
 	return best
 }
 
-func bucketRounds(rounds []Stored, from, to int64) []map[string]any {
+func bucketRounds(rounds []store.Stored, from, to int64) []map[string]any {
 	width := max((to-from)/targetPoints, 60_000)
 	var out []map[string]any
 	i := 0
@@ -62,7 +66,7 @@ func bucketRounds(rounds []Stored, from, to int64) []map[string]any {
 		}
 		b := rounds[i:j]
 		if len(b) > 0 {
-			col := func(f func(Stored) *float64) []float64 {
+			col := func(f func(store.Stored) *float64) []float64 {
 				var v []float64
 				for _, s := range b {
 					if x := f(s); x != nil {
@@ -71,8 +75,8 @@ func bucketRounds(rounds []Stored, from, to int64) []map[string]any {
 				}
 				return v
 			}
-			loss, level, worst := 0.0, Good, b[0]
-			var links []LinkKind
+			loss, level, worst := 0.0, verdict.Good, b[0]
+			var links []probe.LinkKind
 			for _, s := range b {
 				if s.Round.Edge.Loss != nil {
 					loss = math.Max(loss, *s.Round.Edge.Loss)
@@ -90,17 +94,17 @@ func bucketRounds(rounds []Stored, from, to int64) []map[string]any {
 			}
 			out = append(out, map[string]any{
 				"t": start + width/2, "n": len(b),
-				"gw":    round1(mean(col(func(s Stored) *float64 { return s.Round.Gateway.Ms }))),
-				"edge":  round1(mean(col(func(s Stored) *float64 { return s.Round.Edge.Ms }))),
-				"dns":   round1(mean(col(func(s Stored) *float64 { return s.Round.DnsMs }))),
-				"far":   round1(mean(col(func(s Stored) *float64 { return s.Round.FarMedian() }))),
+				"gw":    num.Round1(mean(col(func(s store.Stored) *float64 { return s.Round.Gateway.Ms }))),
+				"edge":  num.Round1(mean(col(func(s store.Stored) *float64 { return s.Round.Edge.Ms }))),
+				"dns":   num.Round1(mean(col(func(s store.Stored) *float64 { return s.Round.DnsMs }))),
+				"far":   num.Round1(mean(col(func(s store.Stored) *float64 { return s.Round.FarMedian() }))),
 				"loss":  math.Round(loss*1000) / 1000,
 				"level": level.Slug(), "layer": worst.Verdict.At.Slug(), "link": predominant(links).Slug(),
-				"rssi": round1(mean(col(func(s Stored) *float64 {
+				"rssi": num.Round1(mean(col(func(s store.Stored) *float64 {
 					if s.Round.WiFi == nil {
 						return nil
 					}
-					return fp(float64(s.Round.WiFi.Rssi))
+					return num.Ptr(float64(s.Round.WiFi.Rssi))
 				}))),
 			})
 		}
@@ -111,10 +115,10 @@ func bucketRounds(rounds []Stored, from, to int64) []map[string]any {
 
 // linkChanges lists every switch between wired and wireless. Drops to no connection or a VPN
 // are not link changes; the verdict strip shows them.
-func linkChanges(rounds []Stored) []map[string]any {
-	var phys []Stored
+func linkChanges(rounds []store.Stored) []map[string]any {
+	var phys []store.Stored
 	for _, s := range rounds {
-		if s.Round.Link == LinkEthernet || s.Round.Link == LinkWiFi {
+		if s.Round.Link == probe.LinkEthernet || s.Round.Link == probe.LinkWiFi {
 			phys = append(phys, s)
 		}
 	}
@@ -127,30 +131,30 @@ func linkChanges(rounds []Stored) []map[string]any {
 	return out
 }
 
-func buildHistory(db *sql.DB, rng string, now int64) (map[string]any, error) {
-	span, ok := rangeMs(rng)
+func Build(db *sql.DB, rng string, now int64) (map[string]any, error) {
+	span, ok := RangeMs(rng)
 	if !ok {
 		span = 86_400_000
 	}
 	from := now - span
-	rounds, err := roundsBetween(db, from, now)
+	rounds, err := store.RoundsBetween(db, from, now)
 	if err != nil {
 		return nil, err
 	}
 	// Only full tests carry the line's real speed.
-	bws, err := bandwidthBetween(db, from, now)
+	bws, err := store.BandwidthBetween(db, from, now)
 	if err != nil {
 		return nil, err
 	}
 	bw := []map[string]any{}
 	for _, b := range bws {
 		if b.Trigger.IsFull() {
-			bw = append(bw, map[string]any{"t": b.AtMs, "down": round1(b.DownMbps), "up": round1(b.UpMbps), "rpm": round1(b.Rpm), "trigger": b.Trigger.Slug()})
+			bw = append(bw, map[string]any{"t": b.AtMs, "down": num.Round1(b.DownMbps), "up": num.Round1(b.UpMbps), "rpm": num.Round1(b.Rpm), "trigger": b.Trigger.Slug()})
 		}
 	}
 	bad := 0
 	for _, s := range rounds {
-		if s.Verdict.Level >= Fair {
+		if s.Verdict.Level >= verdict.Fair {
 			bad++
 		}
 	}

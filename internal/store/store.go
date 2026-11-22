@@ -1,7 +1,8 @@
-package main
-
+// Package store is Packet's one database.
+//
 // Packet's one database. Numbers about the path only: no hostnames visited, no apps, no traffic.
 // The schema matches the Rust original, so either can read the other's file.
+package store
 
 import (
 	"database/sql"
@@ -10,6 +11,9 @@ import (
 	"path/filepath"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/cleonte/menubar/packet-go/internal/probe"
+	"github.com/cleonte/menubar/packet-go/internal/verdict"
 )
 
 const (
@@ -20,7 +24,7 @@ const (
 )
 
 // dataDir is the one place Packet decides where it writes. PACKET_DATA_DIR overrides it.
-func dataDir() string {
+func DataDir() string {
 	if d := os.Getenv("PACKET_DATA_DIR"); d != "" {
 		return d
 	}
@@ -28,17 +32,17 @@ func dataDir() string {
 	return filepath.Join(home, "Library/Application Support/Packet")
 }
 
-func openStore() (*sql.DB, error) {
-	dir := dataDir()
+func OpenStore() (*sql.DB, error) {
+	dir := DataDir()
 	// Owner-only: the history is nobody else's business on a shared Mac.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	_ = os.Chmod(dir, 0o700)
-	return openStoreAt(filepath.Join(dir, "packet.sqlite"))
+	return OpenAt(filepath.Join(dir, "packet.sqlite"))
 }
 
-func openStoreAt(path string) (*sql.DB, error) {
+func OpenAt(path string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(2000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, err
@@ -87,7 +91,7 @@ func nullable(p *float64) any {
 	return *p
 }
 
-func insertRound(db *sql.DB, r *Round, v Verdict) error {
+func InsertRound(db *sql.DB, r *probe.Round, v verdict.Verdict) error {
 	if r.AtMs <= 0 {
 		return fmt.Errorf("round has no timestamp")
 	}
@@ -116,7 +120,7 @@ func insertRound(db *sql.DB, r *Round, v Verdict) error {
 	return err
 }
 
-func insertBandwidth(db *sql.DB, b Bandwidth) error {
+func InsertBandwidth(db *sql.DB, b probe.Bandwidth) error {
 	if b.AtMs <= 0 || b.DownBytes < 0 || b.UpBytes < 0 {
 		return fmt.Errorf("bad bandwidth row")
 	}
@@ -125,15 +129,15 @@ func insertBandwidth(db *sql.DB, b Bandwidth) error {
 	return err
 }
 
-func prune(db *sql.DB, now int64) {
+func Prune(db *sql.DB, now int64) {
 	cutoff := now - retainDays*86_400_000
 	_, _ = db.Exec("DELETE FROM rounds WHERE at_ms < ?", cutoff)
 	_, _ = db.Exec("DELETE FROM bandwidth WHERE at_ms < ?", cutoff)
 }
 
 type Stored struct {
-	Round   *Round
-	Verdict Verdict
+	Round   *probe.Round
+	Verdict verdict.Verdict
 }
 
 type scanner interface{ Scan(...any) error }
@@ -158,18 +162,18 @@ func scanStored(row scanner) (Stored, error) {
 		}
 		return &n.Float64
 	}
-	r := &Round{AtMs: atMs, Link: LinkKind(link), Expensive: expensive != 0,
-		Gateway: Layer{nf(gwMs), nf(gwLoss), nf(gwJit)}, Edge: Layer{nf(eMs), nf(eLoss), nf(eJit)},
+	r := &probe.Round{AtMs: atMs, Link: probe.LinkKind(link), Expensive: expensive != 0,
+		Gateway: probe.Layer{Ms: nf(gwMs), Loss: nf(gwLoss), Jitter: nf(gwJit)}, Edge: probe.Layer{Ms: nf(eMs), Loss: nf(eLoss), Jitter: nf(eJit)},
 		Colo: colo.String, DnsMs: nf(dns)}
 	if rssi.Valid {
-		r.WiFi = &WiFi{Rssi: rssi.Int64, Noise: noise.Int64, TxMbps: tx.Float64, Channel: channel.Int64, Band: band.Int64}
+		r.WiFi = &probe.WiFi{Rssi: rssi.Int64, Noise: noise.Int64, TxMbps: tx.Float64, Channel: channel.Int64, Band: band.Int64}
 	}
 	for i := range reg {
 		r.Regions[i] = nf(reg[i])
 	}
 	// A router that was pinged but never answered is stored with loss and no latency.
 	r.GatewayKnown = gwMs.Valid || gwLoss.Valid
-	return Stored{r, storedVerdict(level, layer)}, nil
+	return Stored{r, verdict.StoredVerdict(level, layer)}, nil
 }
 
 func queryRounds(db *sql.DB, q string, args ...any) ([]Stored, error) {
@@ -190,7 +194,7 @@ func queryRounds(db *sql.DB, q string, args ...any) ([]Stored, error) {
 }
 
 // nearestRound is the stored round closest to atMs, within windowMs.
-func nearestRound(db *sql.DB, atMs, windowMs int64) (*Stored, error) {
+func NearestRound(db *sql.DB, atMs, windowMs int64) (*Stored, error) {
 	rs, err := queryRounds(db, "SELECT "+roundCols+" FROM rounds WHERE at_ms BETWEEN ? AND ? ORDER BY ABS(at_ms - ?) LIMIT 1",
 		atMs-windowMs, atMs+windowMs, atMs)
 	if err != nil || len(rs) == 0 {
@@ -199,18 +203,18 @@ func nearestRound(db *sql.DB, atMs, windowMs int64) (*Stored, error) {
 	return &rs[0], nil
 }
 
-func roundsBetween(db *sql.DB, from, to int64) ([]Stored, error) {
+func RoundsBetween(db *sql.DB, from, to int64) ([]Stored, error) {
 	return queryRounds(db, "SELECT "+roundCols+" FROM rounds WHERE at_ms BETWEEN ? AND ? ORDER BY at_ms", from, to)
 }
 
-func scanBW(row scanner) (Bandwidth, error) {
-	var b Bandwidth
+func scanBW(row scanner) (probe.Bandwidth, error) {
+	var b probe.Bandwidth
 	var trig int
 	var down, up, rpm sql.NullFloat64
 	if err := row.Scan(&b.AtMs, &trig, &down, &up, &b.DownBytes, &b.UpBytes, &rpm); err != nil {
 		return b, err
 	}
-	b.Trigger = Trigger(trig)
+	b.Trigger = probe.Trigger(trig)
 	for _, p := range []struct {
 		n sql.NullFloat64
 		d **float64
@@ -223,13 +227,13 @@ func scanBW(row scanner) (Bandwidth, error) {
 	return b, nil
 }
 
-func queryBW(db *sql.DB, q string, args ...any) ([]Bandwidth, error) {
+func queryBW(db *sql.DB, q string, args ...any) ([]probe.Bandwidth, error) {
 	rows, err := db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Bandwidth
+	var out []probe.Bandwidth
 	for rows.Next() {
 		b, err := scanBW(rows)
 		if err != nil {
@@ -240,7 +244,7 @@ func queryBW(db *sql.DB, q string, args ...any) ([]Bandwidth, error) {
 	return out, rows.Err()
 }
 
-func firstBW(db *sql.DB, q string, args ...any) *Bandwidth {
+func firstBW(db *sql.DB, q string, args ...any) *probe.Bandwidth {
 	bs, err := queryBW(db, q, args...)
 	if err != nil || len(bs) == 0 {
 		return nil
@@ -249,17 +253,17 @@ func firstBW(db *sql.DB, q string, args ...any) *Bandwidth {
 }
 
 // latestFull is the last hourly or Test Now run: the line's real speed.
-func latestFull(db *sql.DB) *Bandwidth {
+func LatestFull(db *sql.DB) *probe.Bandwidth {
 	return firstBW(db, "SELECT * FROM bandwidth WHERE trigger IN (2,3) ORDER BY at_ms DESC LIMIT 1")
 }
-func latestQuick(db *sql.DB) *Bandwidth {
+func LatestQuick(db *sql.DB) *probe.Bandwidth {
 	return firstBW(db, "SELECT * FROM bandwidth WHERE trigger IN (0,1) ORDER BY at_ms DESC LIMIT 1")
 }
-func nearestBandwidth(db *sql.DB, atMs, windowMs int64) *Bandwidth {
+func NearestBandwidth(db *sql.DB, atMs, windowMs int64) *probe.Bandwidth {
 	return firstBW(db, "SELECT * FROM bandwidth WHERE at_ms BETWEEN ? AND ? ORDER BY ABS(at_ms - ?) LIMIT 1",
 		atMs-windowMs, atMs+windowMs, atMs)
 }
-func bandwidthBetween(db *sql.DB, from, to int64) ([]Bandwidth, error) {
+func BandwidthBetween(db *sql.DB, from, to int64) ([]probe.Bandwidth, error) {
 	return queryBW(db, "SELECT * FROM bandwidth WHERE at_ms BETWEEN ? AND ? ORDER BY at_ms", from, to)
 }
 
@@ -276,18 +280,18 @@ func medianOf(db *sql.DB, col string, since int64) *float64 {
 			v = append(v, x)
 		}
 	}
-	return median(v)
+	return probe.Median(v)
 }
 
 // loadBaseline: medians of the last 7 days of good rounds, and of quick-check downloads (only
 // quick checks are compared with quick checks).
-func loadBaseline(db *sql.DB, now int64) Baseline {
+func LoadBaseline(db *sql.DB, now int64) verdict.Baseline {
 	since := now - 7*86_400_000
 	var good int
 	if db.QueryRow("SELECT COUNT(*) FROM rounds WHERE at_ms >= ? AND level = 0", since).Scan(&good) != nil || good < baselineMinRounds {
-		return Baseline{}
+		return verdict.Baseline{}
 	}
-	var b Baseline
+	var b verdict.Baseline
 	for i := range b.Regions {
 		b.Regions[i] = medianOf(db, fmt.Sprintf("r%d", i), since)
 	}
@@ -303,14 +307,14 @@ func loadBaseline(db *sql.DB, now int64) Baseline {
 			}
 		}
 		if len(downs) >= 6 {
-			b.DownMbps = median(downs)
+			b.DownMbps = probe.Median(downs)
 		}
 	}
 	return b
 }
 
 // recentScheduledDown is a quick-check download from the last 15 minutes, for the verdict.
-func recentScheduledDown(db *sql.DB, now int64) *float64 {
+func RecentScheduledDown(db *sql.DB, now int64) *float64 {
 	var d sql.NullFloat64
 	if db.QueryRow("SELECT down_mbps FROM bandwidth WHERE at_ms >= ? AND trigger IN (0,1) ORDER BY at_ms DESC LIMIT 1", now-15*60_000).Scan(&d) != nil || !d.Valid {
 		return nil

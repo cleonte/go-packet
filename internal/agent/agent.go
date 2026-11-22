@@ -1,6 +1,5 @@
-package main
-
-// `packet agent install` runs the daemon at login through a launchd user agent.
+// Package agent installs and removes the launchd user agent for `packet daemon`. `packet agent install` runs the daemon at login through a launchd user agent.
+package agent
 
 import (
 	"fmt"
@@ -17,7 +16,7 @@ func agentPlistPath() string {
 	return filepath.Join(home, "Library/LaunchAgents", agentLabel+".plist")
 }
 
-func cmdAgent(args []string) int {
+func CmdAgent(args []string) int {
 	domain := "gui/" + strconv.Itoa(os.Getuid())
 	switch {
 	case len(args) == 1 && args[0] == "install":
