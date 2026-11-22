@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cleonte/menubar/packet-go/internal/agent"
 	"github.com/cleonte/menubar/packet-go/internal/clock"
 	"github.com/cleonte/menubar/packet-go/internal/history"
 	"github.com/cleonte/menubar/packet-go/internal/probe"
@@ -38,7 +37,6 @@ USAGE
   packet at <WHEN> [--json]       what the network was like at a past moment
   packet history [--range R] [--json]
   packet hourly on|off            turn the hourly line-speed test on or off (about 3.4 GB/day)
-  packet agent install|uninstall  run the daemon at login (launchd)
   packet help
 
 WHEN   14:30 · 2026-10-12 14:30 · 30m · 2h · 3d · epoch ms
@@ -111,8 +109,6 @@ func main() {
 		} else {
 			fmt.Println("hourly line-speed test:", rest[1])
 		}
-	case "agent":
-		code = agent.CmdAgent(rest[1:])
 	case "help", "--help", "-h":
 		fmt.Println(help)
 	default:
@@ -235,7 +231,7 @@ func cmdStatus(jsonOut bool) int {
 	c := &http.Client{Timeout: 3 * time.Second}
 	resp, err := c.Get("http://" + server.ListenAddr() + "/v1/status")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "no daemon answering; start it with `packet daemon` (or `packet agent install`)")
+		fmt.Fprintln(os.Stderr, "no daemon answering; start it with `packet daemon`, or open CLBar, which starts it")
 		return 1
 	}
 	defer resp.Body.Close()

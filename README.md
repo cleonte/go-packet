@@ -29,7 +29,6 @@ internal/sampler/    the minute loop and the bandwidth schedule
 internal/report/     plain-words rows and JSON for the CLI and API
 internal/history/    bucketed history for charts
 internal/server/     the localhost API and history page
-internal/agent/      launchd user agent (optional)
 internal/clock/      time helpers and the `packet at` parser
 internal/num/        helpers for optional numbers
 ```
@@ -72,9 +71,10 @@ cross-site and DNS-rebinding requests from web pages.
 
 ## Running it
 
-Run the daemon from CLBar (it starts it for you), or from a terminal. A launchd agent
-(`packet agent install`) works but **cannot ping the router**: macOS Local Network privacy blocks
-bare launchd binaries. The Internet, DNS and World layers are unaffected.
+Run the daemon from CLBar (it starts it for you), or from a terminal with `packet daemon`.
+Don't run it as a launchd agent: macOS Local Network privacy blocks bare launchd binaries from
+the LAN, so the router layer can't be pinged. A child of an app (CLBar) is allowed. The Internet,
+DNS and World layers are unaffected either way.
 
 ## Differences from the original
 
