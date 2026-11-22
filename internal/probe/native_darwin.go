@@ -43,3 +43,10 @@ func pathState() (bool, bool) {
 
 // pathStart begins watching the network path early, so the first round has an answer.
 func PathStart() { C.packet_path_start() }
+
+// PathGeneration counts network path updates (interface, Wi-Fi network or route changes, and
+// wake from sleep). A change means "the network may be different now".
+func PathGeneration() int {
+	C.packet_path_start()
+	return int(C.packet_path_generation())
+}

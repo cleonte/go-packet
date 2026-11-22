@@ -56,7 +56,7 @@ func (r *Round) RegionsUp() (n int) {
 
 // runRound measures every layer in parallel.
 func RunRound(atMs int64, seq uint64) *Round {
-	link := currentLink()
+	link := CurrentLink()
 	exp, con := pathState()
 	r := &Round{AtMs: atMs, Link: link.Kind, WiFi: link.WiFi, Expensive: exp || con}
 	if link.Kind == LinkNone {

@@ -23,7 +23,7 @@ int packet_wifi(char *name, int namelen, long *rssi, long *noise, double *tx, lo
     }
 }
 
-static atomic_int g_expensive, g_constrained, g_seen;
+static atomic_int g_expensive, g_constrained, g_seen, g_generation;
 static nw_path_monitor_t g_monitor;
 
 void packet_path_start(void) {
@@ -35,6 +35,7 @@ void packet_path_start(void) {
             atomic_store(&g_expensive, nw_path_is_expensive(path));
             atomic_store(&g_constrained, nw_path_is_constrained(path));
             atomic_store(&g_seen, 1);
+            atomic_fetch_add(&g_generation, 1);
         });
         nw_path_monitor_start(g_monitor);
     });
@@ -44,4 +45,8 @@ int packet_path_state(int *expensive, int *constrained) {
     *expensive = atomic_load(&g_expensive);
     *constrained = atomic_load(&g_constrained);
     return atomic_load(&g_seen);
+}
+
+int packet_path_generation(void) {
+    return atomic_load(&g_generation);
 }

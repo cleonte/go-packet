@@ -73,7 +73,11 @@ func atOf(b *probe.Bandwidth) *int64 {
 }
 
 // step runs one round and the bandwidth test it calls for. manual is Test Now.
-func step(db *sql.DB, st *State, manual bool,
+//
+// retryBad is set for a round taken right after a wake from sleep or a network change, when the
+// link is often not back yet: a round that looks bad is measured once more after retryDelay, and
+// only the second result counts, so waking the Mac does not raise a false "offline".
+func step(db *sql.DB, st *State, manual, retryBad bool,
 	measure func(int64, uint64) *probe.Round, bandwidth func(probe.Trigger, int64) probe.Bandwidth, notify func(Snapshot)) {
 	now := clock.NowMs()
 	if now-st.baselineAt > baselineRefreshMs {
@@ -86,6 +90,12 @@ func step(db *sql.DB, st *State, manual bool,
 	round := measure(now, st.seq)
 	st.seq++
 	recent := store.RecentScheduledDown(db, now)
+	if retryBad && verdict.Judge(round, st.baseline, recent).Level != verdict.Good {
+		time.Sleep(retryDelay)
+		now = clock.NowMs()
+		round = measure(now, st.seq)
+		st.seq++
+	}
 	fs := verdict.Findings(round, st.baseline, recent)
 	raw := verdict.Judge(round, st.baseline, recent)
 	prevLevel := st.prevSettled
@@ -127,26 +137,97 @@ func step(db *sql.DB, st *State, manual bool,
 	notify(snap)
 }
 
-// runSampler measures every minute until ctx ends. A signal on testNow runs Test Now.
+const (
+	// A gap this long between rounds means the Mac slept (or stalled): a round is 60 s apart.
+	wakeGapMs = 2*roundEveryMs + 30_000
+	// Path changes often come in bursts (Wi-Fi roaming, VPN up/down); wait for them to settle.
+	pathDebounce = 3 * time.Second
+	// But never measure because of the network more often than this.
+	pathMinGapMs = 10_000
+	// How long to wait for a default route to come back after a wake or change.
+	linkWait = 30 * time.Second
+	// How often the path generation is polled.
+	pathPoll = 2 * time.Second
+)
+
+// retryDelay is how long to wait before re-measuring a round that looked bad right after a wake.
+var retryDelay = 5 * time.Second
+
+// IsWake reports whether the time since the last round shows the Mac was asleep. Wall-clock
+// milliseconds are compared: Go's monotonic clock does not advance during sleep on macOS.
+func IsWake(lastRoundMs, nowMs int64) bool {
+	return lastRoundMs > 0 && nowMs-lastRoundMs > wakeGapMs
+}
+
+// watchPath signals kick whenever generation() changes, polling every poll.
+func watchPath(ctx context.Context, generation func() int, poll time.Duration, kick chan<- struct{}) {
+	last := generation()
+	t := time.NewTicker(poll)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if g := generation(); g != last {
+				last = g
+				select {
+				case kick <- struct{}{}:
+				default: // one is already pending
+				}
+			}
+		}
+	}
+}
+
+// sleepCtx sleeps for d, and reports false if ctx ended first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
+// Run measures every minute until ctx ends. A signal on testNow runs Test Now. A wake from sleep
+// or a change of network path runs a round early (after waiting for the link to return).
 func Run(ctx context.Context, db *sql.DB, testNow <-chan struct{}, notify func(Snapshot)) {
 	st := loadState(db, clock.NowMs())
 	every := time.Duration(roundEveryMs) * time.Millisecond
 	next := time.Now()
+	var lastRound int64
+	kick := make(chan struct{}, 1)
+	go watchPath(ctx, probe.PathGeneration, pathPoll, kick)
 	for {
-		manual := false
+		manual, afterChange := false, false
 		select {
 		case <-ctx.Done():
 			return
 		case <-testNow:
 			manual = true
+		case <-kick:
+			if !sleepCtx(ctx, pathDebounce) {
+				return
+			}
+			select { // changes during the debounce collapse into this one round
+			case <-kick:
+			default:
+			}
+			if clock.NowMs()-lastRound < pathMinGapMs {
+				continue
+			}
+			afterChange = true
 		case <-time.After(time.Until(next)):
+			afterChange = IsWake(lastRound, clock.NowMs())
+		}
+		if afterChange {
+			probe.WaitForLink(ctx, linkWait)
 		}
 		if !manual {
-			next = next.Add(every)
-			if next.Before(time.Now()) {
-				next = time.Now().Add(every)
-			}
+			next = time.Now().Add(every)
 		}
-		step(db, st, manual, probe.RunRound, probe.MeasureBandwidth, notify)
+		step(db, st, manual, afterChange, probe.RunRound, probe.MeasureBandwidth, notify)
+		lastRound = clock.NowMs()
 	}
 }

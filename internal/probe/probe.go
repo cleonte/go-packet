@@ -116,7 +116,8 @@ func classify(iface, wifiIface string) LinkKind {
 	return LinkOther
 }
 
-func currentLink() Link {
+// CurrentLink reads the default route and Wi-Fi state.
+func CurrentLink() Link {
 	out, _ := exec.Command("/sbin/route", "-n", "get", "default").Output()
 	gw, iface := parseRoute(string(out))
 	wifiIface, wifi := currentWiFi()
@@ -631,4 +632,27 @@ func RpmLabel(rpm float64) string {
 		return "Medium"
 	}
 	return "Low"
+}
+
+// WaitForLink waits until there is a default route again (after a wake or a network change), up
+// to timeout, and reports whether there is one. A short grace follows so DHCP and DNS can settle.
+func WaitForLink(ctx context.Context, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if CurrentLink().Kind != LinkNone {
+			select {
+			case <-ctx.Done():
+			case <-time.After(2 * time.Second):
+			}
+			return ctx.Err() == nil
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(time.Second):
+		}
+	}
 }
