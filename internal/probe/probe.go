@@ -17,13 +17,15 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
 
 var edgeIP = net.IPv4(1, 1, 1, 1)
 
-const (
+// The endpoints Packet talks to. Variables so tests can point them at a local server.
+var (
 	traceURL = "https://1.1.1.1/cdn-cgi/trace"
 	downURL  = "https://speed.cloudflare.com/__down?bytes="
 	upURL    = "https://speed.cloudflare.com/__up"
@@ -354,7 +356,13 @@ func dnsMs(round uint64) *float64 {
 		v := float64(time.Since(t).Microseconds()) / 1000
 		return &v
 	}
-	conn, err := net.Dial("udp4", net.JoinHostPort(server.String(), "53")) // connected: only the resolver can answer
+	return dnsVia(net.JoinHostPort(server.String(), "53"), name, 2*time.Second)
+}
+
+// dnsVia times one query sent to addr (host:port). It is connected, so only the resolver can
+// answer, and the ID is random so nobody can guess it. nil when there is no valid answer in time.
+func dnsVia(addr, name string, timeout time.Duration) *float64 {
+	conn, err := net.Dial("udp4", addr) // connected: only the resolver can answer
 	if err != nil {
 		return nil
 	}
@@ -362,7 +370,7 @@ func dnsMs(round uint64) *float64 {
 	var idb [2]byte
 	_, _ = rand.Read(idb[:])
 	query := dnsQuery(binary.BigEndian.Uint16(idb[:]), name)
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(timeout)
 	_ = conn.SetDeadline(deadline)
 	t := time.Now()
 	if _, err := conn.Write(query); err != nil {
@@ -480,23 +488,25 @@ func aggregateMbps(streams []streamResult) *float64 {
 	return &v
 }
 
+// countingReader feeds an upload body and counts what the transport actually read. The HTTP
+// transport reads it on its own goroutine, so everything the stream goroutine reads back is atomic.
 type countingReader struct {
-	n       int64
-	left    int64
+	n       atomic.Int64 // bytes handed to the transport
+	startNs atomic.Int64 // when the first byte was requested, in ns since t0 (0 = not yet)
+	t0      time.Time
+	left    int64 // only the transport's goroutine touches this
 	chunk   []byte
-	started func()
-	once    sync.Once
 }
 
 func (r *countingReader) Read(p []byte) (int, error) {
-	r.once.Do(r.started)
+	r.startNs.CompareAndSwap(0, max(time.Since(r.t0).Nanoseconds(), 1))
 	if r.left <= 0 {
 		return 0, io.EOF
 	}
 	k := min(int64(len(p)), int64(len(r.chunk)), r.left)
 	copy(p, r.chunk[:k])
 	r.left -= k
-	r.n += k
+	r.n.Add(k)
 	return int(k), nil
 }
 
@@ -528,7 +538,7 @@ func runStreams(c Caps, upload bool) (res []streamResult, total int64) {
 			var n int64
 			var start float64
 			if upload {
-				cr := &countingReader{left: c.UpBytes, chunk: chunk, started: func() { start = time.Since(t0).Seconds() }}
+				cr := &countingReader{left: c.UpBytes, chunk: chunk, t0: t0}
 				req, _ := http.NewRequestWithContext(ctx, "POST", upURL, cr)
 				req.Header.Set("Content-Type", "application/octet-stream")
 				req.ContentLength = c.UpBytes
@@ -536,11 +546,15 @@ func runStreams(c Caps, upload bool) (res []streamResult, total int64) {
 				if resp != nil {
 					io.Copy(io.Discard, resp.Body)
 					resp.Body.Close()
+					if resp.StatusCode < 200 || resp.StatusCode > 299 {
+						return // an error page is not a measurement
+					}
 				}
 				if err != nil && ctx.Err() == nil {
 					return
 				}
-				n = cr.n
+				n = cr.n.Load()
+				start = float64(cr.startNs.Load()) / 1e9
 			} else {
 				req, _ := http.NewRequestWithContext(ctx, "GET", downURL+strconv.FormatInt(c.DownBytes, 10), nil)
 				resp, err := http.DefaultClient.Do(req)

@@ -206,3 +206,109 @@ func TestVerdictChangesAreLogged(t *testing.T) {
 		}
 	}
 }
+
+// runLoop starts Run with stubbed measurements and returns a handle to watch and stop it.
+type loop struct {
+	rounds   atomic.Int32
+	manual   atomic.Int32
+	retried  atomic.Int32
+	cancel   context.CancelFunc
+	done     chan struct{}
+	testNow  chan struct{}
+	pathGen  atomic.Int32
+	snapshot chan Snapshot
+}
+
+func startLoop(t *testing.T) *loop {
+	t.Helper()
+	l := &loop{testNow: make(chan struct{}, 1), done: make(chan struct{}), snapshot: make(chan Snapshot, 16)}
+	oldM, oldB, oldG, oldW := measureRound, measureBandwidth, pathGeneration, waitForLink
+	oldDeb, oldGap, oldRetry, oldPoll := pathDebounce, pathMinGapMs, retryDelay, pathPoll
+	t.Cleanup(func() {
+		measureRound, measureBandwidth, pathGeneration, waitForLink = oldM, oldB, oldG, oldW
+		pathDebounce, pathMinGapMs, retryDelay, pathPoll = oldDeb, oldGap, oldRetry, oldPoll
+	})
+	pathDebounce, pathMinGapMs, retryDelay, pathPoll = 10*time.Millisecond, 0, 0, 10*time.Millisecond
+	measureRound = func(at int64, _ uint64) *probe.Round {
+		l.rounds.Add(1)
+		r := probetest.Healthy()
+		r.AtMs = at
+		return r
+	}
+	measureBandwidth = func(tr probe.Trigger, at int64) probe.Bandwidth {
+		if tr == probe.TrigManual {
+			l.manual.Add(1)
+		}
+		return probe.Bandwidth{AtMs: at, Trigger: tr, DownMbps: num.Ptr(100), UpMbps: num.Ptr(50)}
+	}
+	pathGeneration = func() int { return int(l.pathGen.Load()) }
+	waitForLink = func(context.Context, time.Duration) bool { l.retried.Add(1); return true }
+
+	db, err := store.OpenAt(filepath.Join(t.TempDir(), "loop.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	l.cancel = cancel
+	go func() {
+		Run(ctx, db, l.testNow, func(s Snapshot) {
+			select {
+			case l.snapshot <- s:
+			default:
+			}
+		})
+		close(l.done)
+	}()
+	t.Cleanup(cancel)
+	return l
+}
+
+func (l *loop) waitRounds(t *testing.T, n int32) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for l.rounds.Load() < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d rounds after 5s, want %d", l.rounds.Load(), n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestRunMeasuresImmediatelyAndStopsOnCancel(t *testing.T) {
+	l := startLoop(t)
+	l.waitRounds(t, 1)
+	if l.retried.Load() != 0 {
+		t.Fatal("the first round is not after a wake")
+	}
+	l.cancel()
+	select {
+	case <-l.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not stop after the context ended")
+	}
+}
+
+func TestRunTestNowRunsARoundAndAFullTest(t *testing.T) {
+	l := startLoop(t)
+	l.waitRounds(t, 1)
+	l.testNow <- struct{}{}
+	l.waitRounds(t, 2)
+	deadline := time.Now().Add(2 * time.Second)
+	for l.manual.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if l.manual.Load() != 1 {
+		t.Fatalf("Test Now must run one manual bandwidth test, ran %d", l.manual.Load())
+	}
+}
+
+func TestRunMeasuresEarlyWhenThePathChanges(t *testing.T) {
+	l := startLoop(t)
+	l.waitRounds(t, 1)
+	l.pathGen.Add(1) // the network changed; the next scheduled round is a minute away
+	l.waitRounds(t, 2)
+	if l.retried.Load() == 0 {
+		t.Fatal("a round after a network change waits for the link first")
+	}
+}
