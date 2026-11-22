@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Packet history</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{color-scheme:light dark;--bg:#fff;--fg:#1d1d1f;--dim:#86868b;--grid:#0001;--good:#34c759;--fair:#ffcc00;--poor:#ff3b30;--offline:#8e8e93}
+@media(prefers-color-scheme:dark){:root{--bg:#1c1c1e;--fg:#f5f5f7;--grid:#fff2}}
+body{margin:0;padding:24px;background:var(--bg);color:var(--fg);font:14px -apple-system,system-ui,sans-serif;max-width:900px;margin:auto}
+h1{font-size:20px;margin:0 0 4px}.sub{color:var(--dim);margin-bottom:16px}
+.tabs{display:flex;gap:8px;margin:12px 0}
+button{font:inherit;border:1px solid var(--grid);background:none;color:var(--fg);border-radius:8px;padding:4px 12px;cursor:pointer}
+button.on{background:var(--fg);color:var(--bg)}
+.card{margin:16px 0}.card h2{font-size:13px;color:var(--dim);margin:0 0 6px;font-weight:600}
+svg{width:100%;display:block;overflow:visible}
+.legend span{margin-right:14px;color:var(--dim);font-size:12px}.legend i{display:inline-block;width:10px;height:3px;margin-right:4px;vertical-align:middle}
+#verdict{font-size:16px;margin:8px 0}
+</style></head><body>
+<h1>Packet history</h1><div class="sub" id="sub">loading…</div>
+<div id="verdict"></div>
+<div class="tabs" id="tabs"></div>
+<div class="card"><h2>Verdict (each bar is a time bucket; shaded = fair or worse)</h2><svg id="strip" height="26"></svg></div>
+<div class="card"><h2>Latency, ms</h2><svg id="lat" height="170"></svg>
+<div class="legend"><span><i style="background:#0a84ff"></i>router</span><span><i style="background:#30d158"></i>internet</span><span><i style="background:#ff9f0a"></i>DNS</span><span><i style="background:#bf5af2"></i>far regions</span></div></div>
+<div class="card"><h2>Packet loss, %</h2><svg id="loss" height="70"></svg></div>
+<div class="card"><h2>Full speed tests, Mbps</h2><svg id="bw" height="90"></svg><div class="legend"><span><i style="background:#30d158"></i>down</span><span><i style="background:#ff9f0a"></i>up</span></div></div>
+<script>
+const SVG="http://www.w3.org/2000/svg",$=id=>document.getElementById(id);
+let range=new URLSearchParams(location.search).get("range")||"24h";
+const col={good:"var(--good)",fair:"var(--fair)",poor:"var(--poor)",offline:"var(--offline)"};
+function el(n,a,p){const e=document.createElementNS(SVG,n);for(const k in a)e.setAttribute(k,a[k]);p&&p.appendChild(e);return e}
+function lines(svg,H,d,series,xmin,xmax,fixedMax){
+  svg.innerHTML="";const W=900;svg.setAttribute("viewBox","0 0 "+W+" "+H);
+  let max=fixedMax||1;series.forEach(s=>d.forEach(p=>{if(p[s.k]!=null)max=Math.max(max,p[s.k])}));
+  const X=t=>(t-xmin)/(xmax-xmin)*W,Y=v=>H-4-(v/max)*(H-12);
+  el("line",{x1:0,x2:W,y1:H-4,y2:H-4,stroke:"var(--grid)"},svg);
+  el("text",{x:2,y:10,fill:"var(--dim)","font-size":10},svg).textContent=Math.round(max);
+  series.forEach(s=>{let path="",pen=false;d.forEach(p=>{if(p[s.k]==null){pen=false;return}path+=(pen?"L":"M")+X(p.t).toFixed(1)+" "+Y(p[s.k]).toFixed(1);pen=true});
+    el("path",{d:path,fill:"none",stroke:s.c,"stroke-width":1.6,"stroke-linejoin":"round"},svg)});
+}
+async function load(){
+  const [h,s]=await Promise.all([fetch("/v1/history?range="+range).then(r=>r.json()),fetch("/v1/status").then(r=>r.json())]);
+  $("tabs").innerHTML="";["1h","24h","7d","30d"].forEach(r=>{const b=document.createElement("button");b.textContent=r;b.className=r===range?"on":"";b.onclick=()=>{range=r;load()};$("tabs").appendChild(b)});
+  $("sub").textContent=h.rounds+" rounds, "+h.bad_rounds+" fair or worse";
+  $("verdict").textContent=s.ready?(({good:"🟢",fair:"🟡",poor:"🔴",offline:"⚫"})[s.verdict.level]+" "+s.verdict.sentence):"waiting for the first round…";
+  const W=900,xmin=h.from,xmax=h.to,bw=Math.max(h.width/(xmax-xmin)*W,2);
+  const strip=$("strip");strip.innerHTML="";strip.setAttribute("viewBox","0 0 "+W+" 26");
+  h.buckets.forEach(b=>{el("rect",{x:(b.t-h.width/2-xmin)/(xmax-xmin)*W,y:0,width:bw,height:26,fill:col[b.level]||col.good,opacity:b.level==="good"?.35:.95},strip)});
+  h.changes.forEach(c=>el("line",{x1:(c.t-xmin)/(xmax-xmin)*W,x2:(c.t-xmin)/(xmax-xmin)*W,y1:0,y2:26,stroke:"var(--fg)","stroke-dasharray":"2 2"},strip));
+  lines($("lat"),170,h.buckets,[{k:"gw",c:"#0a84ff"},{k:"edge",c:"#30d158"},{k:"dns",c:"#ff9f0a"},{k:"far",c:"#bf5af2"}],xmin,xmax);
+  lines($("loss"),70,h.buckets.map(b=>({t:b.t,loss:b.loss*100})),[{k:"loss",c:"#ff3b30"}],xmin,xmax,5);
+  lines($("bw"),90,h.bandwidth,[{k:"down",c:"#30d158"},{k:"up",c:"#ff9f0a"}],xmin,xmax);
+}
+load();setInterval(load,60000);
+</script></body></html>
