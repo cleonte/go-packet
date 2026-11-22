@@ -1,6 +1,5 @@
 # Standard Go layout: cmd/packet is the binary, internal/* the packages.
-# `make install` puts the CLI in ~/.local/bin. The daemon is started by CLBar
-# (macOS blocks LAN access for bare launchd binaries, so no launchd agent; see README).
+# `make install` puts the CLI in ~/.local/bin.
 BIN := $(HOME)/.local/bin/packet
 
 build:

@@ -1,6 +1,6 @@
 // Package server runs the daemon: the measuring loop plus a localhost-only API.
 //
-// The daemon's local API. It listens on 127.0.0.1 only; CLBar (or curl) reads it.
+// The daemon's local API. It listens on 127.0.0.1 only; A menu bar app (or curl) reads it.
 //
 //	GET  /                     history page (open in a browser)
 //	GET  /v1/status            latest round, verdict, layer rows, bandwidth
@@ -24,12 +24,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cleonte/menubar/packet-go/internal/clock"
-	"github.com/cleonte/menubar/packet-go/internal/history"
-	"github.com/cleonte/menubar/packet-go/internal/probe"
-	"github.com/cleonte/menubar/packet-go/internal/report"
-	"github.com/cleonte/menubar/packet-go/internal/sampler"
-	"github.com/cleonte/menubar/packet-go/internal/store"
+	"github.com/cleonte/go-packet/internal/clock"
+	"github.com/cleonte/go-packet/internal/history"
+	"github.com/cleonte/go-packet/internal/probe"
+	"github.com/cleonte/go-packet/internal/report"
+	"github.com/cleonte/go-packet/internal/sampler"
+	"github.com/cleonte/go-packet/internal/store"
 )
 
 const defaultPort = "47831"

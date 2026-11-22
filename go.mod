@@ -1,4 +1,4 @@
-module github.com/cleonte/menubar/packet-go
+module github.com/cleonte/go-packet
 
 go 1.27.4
 

@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cleonte/menubar/packet-go/internal/num"
-	"github.com/cleonte/menubar/packet-go/internal/probe"
+	"github.com/cleonte/go-packet/internal/num"
+	"github.com/cleonte/go-packet/internal/probe"
 )
 
 type Level int

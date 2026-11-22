@@ -6,9 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/cleonte/menubar/packet-go/internal/probe"
-	"github.com/cleonte/menubar/packet-go/internal/store"
-	"github.com/cleonte/menubar/packet-go/internal/verdict"
+	"github.com/cleonte/go-packet/internal/probe"
+	"github.com/cleonte/go-packet/internal/store"
+	"github.com/cleonte/go-packet/internal/verdict"
 )
 
 const (

@@ -2,8 +2,8 @@
 package probetest
 
 import (
-	"github.com/cleonte/menubar/packet-go/internal/num"
-	"github.com/cleonte/menubar/packet-go/internal/probe"
+	"github.com/cleonte/go-packet/internal/num"
+	"github.com/cleonte/go-packet/internal/probe"
 )
 
 // Healthy is a round with every layer fine, on Ethernet.

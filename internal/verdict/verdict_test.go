@@ -3,9 +3,9 @@ package verdict
 import (
 	"testing"
 
-	"github.com/cleonte/menubar/packet-go/internal/num"
-	"github.com/cleonte/menubar/packet-go/internal/probe"
-	"github.com/cleonte/menubar/packet-go/internal/probe/probetest"
+	"github.com/cleonte/go-packet/internal/num"
+	"github.com/cleonte/go-packet/internal/probe"
+	"github.com/cleonte/go-packet/internal/probe/probetest"
 )
 
 func TestHealthyIsGood(t *testing.T) {

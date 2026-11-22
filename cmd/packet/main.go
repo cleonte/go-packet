@@ -1,5 +1,5 @@
 // Command packet: is it the network? Measures each layer of the connection every minute and says
-// which one is to blame. `packet daemon` runs the measuring loop and a localhost API that CLBar
+// which one is to blame. `packet daemon` runs the measuring loop and a localhost API that a menu bar app
 // reads; the other subcommands answer from the command line.
 //
 // A Go port of github.com/danielmiessler/packet (MIT).
@@ -17,14 +17,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cleonte/menubar/packet-go/internal/clock"
-	"github.com/cleonte/menubar/packet-go/internal/history"
-	"github.com/cleonte/menubar/packet-go/internal/probe"
-	"github.com/cleonte/menubar/packet-go/internal/report"
-	"github.com/cleonte/menubar/packet-go/internal/sampler"
-	"github.com/cleonte/menubar/packet-go/internal/server"
-	"github.com/cleonte/menubar/packet-go/internal/store"
-	"github.com/cleonte/menubar/packet-go/internal/verdict"
+	"github.com/cleonte/go-packet/internal/clock"
+	"github.com/cleonte/go-packet/internal/history"
+	"github.com/cleonte/go-packet/internal/probe"
+	"github.com/cleonte/go-packet/internal/report"
+	"github.com/cleonte/go-packet/internal/sampler"
+	"github.com/cleonte/go-packet/internal/server"
+	"github.com/cleonte/go-packet/internal/store"
+	"github.com/cleonte/go-packet/internal/verdict"
 )
 
 const help = `packet — is it the network?
@@ -231,7 +231,7 @@ func cmdStatus(jsonOut bool) int {
 	c := &http.Client{Timeout: 3 * time.Second}
 	resp, err := c.Get("http://" + server.ListenAddr() + "/v1/status")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "no daemon answering; start it with `packet daemon`, or open CLBar, which starts it")
+		fmt.Fprintln(os.Stderr, "no daemon answering; start it with `packet daemon`")
 		return 1
 	}
 	defer resp.Body.Close()

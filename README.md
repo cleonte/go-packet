@@ -1,14 +1,39 @@
-# packet-go
+# go-packet
 
-**Is it the network?** A Go port of [danielmiessler/packet](https://github.com/danielmiessler/packet)
-(MIT, see [LICENSE](LICENSE)). It measures every layer once a minute and names the one to blame:
-Wi-Fi, local network, internet provider, DNS, or far internet. Same measurements, thresholds and
-storage schema as the original, so either can read the other's database.
+**Is it the network?** `packet` checks every layer of your Mac's connection once a minute and tells
+you in one sentence which layer is to blame: Wi-Fi, local network, internet provider, DNS, or far
+internet. When everything is green, stop blaming the Wi-Fi and go look at the app.
 
-It has no tray icon or window of its own: `packet daemon` serves a localhost API, and
-[CLBar](../CLBar) is the UI. A small history page is served at `http://127.0.0.1:47831/`.
+> **This is a Go port of [Packet](https://github.com/danielmiessler/packet) by
+> [Daniel Miessler](https://github.com/danielmiessler).** The idea, the measurements, the
+> thresholds and the database schema all come from his project (MIT licensed, and this repo keeps
+> his copyright and licence; see [LICENSE](LICENSE)). Go to the original for the polished Mac app
+> with its own menu bar icon and history window. Thank you, Daniel.
 
-## Build
+## What's different here
+
+The original is a Rust app with a tray icon and a window. This port is a headless Go program:
+
+- `packet daemon` measures every minute and serves a small **localhost API**, plus a simple history
+  page at `http://127.0.0.1:47831/`. Put any UI you like on top (a menu bar app, a status bar
+  script, a dashboard).
+- A CLI answers from the terminal: `packet now`, `packet at 14:30`, `packet history`.
+- Same layer-by-layer verdict, same baselines learned from your own history, and the same SQLite
+  schema, so either program can read the other's database.
+- Bandwidth tests use Go's `net/http` instead of shelling out to `curl`.
+
+macOS only (Apple Silicon tested). It reads Wi-Fi signal through CoreWLAN and the path's
+expensive/constrained flags through Network.framework, via two small Objective-C bridges.
+
+## Install
+
+You need macOS 14+, the Xcode Command Line Tools and Go.
+
+```bash
+go install github.com/cleonte/go-packet/cmd/packet@latest
+```
+
+or from a checkout:
 
 ```bash
 make build     # bin/packet
@@ -16,9 +41,67 @@ make test      # go vet + go test -race
 make install   # also copies the CLI to ~/.local/bin
 ```
 
+## Use
+
+```
+packet daemon                   measure every minute and serve the local API (127.0.0.1)
+packet status [--json]          what the running daemon last measured
+packet now [--json]             measure every layer now
+packet test [--json]            measure now plus a full bandwidth test
+packet at <WHEN> [--json]       what the network was like then: 14:30, 2026-10-12 14:30, 30m, 2h, 3d
+packet history [--range R] [--json]
+packet hourly on|off            hourly line-speed test (about 3.4 GB/day, off by default)
+```
+
+Data lives in `~/Library/Application Support/Packet/packet.sqlite` (kept 90 days).
+`PACKET_DATA_DIR` overrides it and `PACKET_PORT` changes the API port.
+
+## How it measures
+
+Every 60 seconds, one round:
+
+| Layer | What is measured |
+|---|---|
+| Link | Ethernet or Wi-Fi; on Wi-Fi, signal, noise, rate and channel |
+| Router | 5 ICMP pings to the default gateway |
+| Internet | 5 ICMP pings to `1.1.1.1` (TCP fallback), plus the Cloudflare data center that answered |
+| DNS | one lookup sent straight to the system resolver |
+| World | a TCP handshake to AWS DynamoDB endpoints in 8 regions on 5 continents |
+
+The verdict names the worst layer. Wi-Fi and router are judged against fixed thresholds; internet,
+DNS and the far regions against your own recent normal. One bad round is held; two in a row change
+the verdict. Bandwidth runs on a light schedule (a ~14 MB check every 10 minutes); a full test only
+when you ask, or hourly if you turn that on. See the
+[original README](https://github.com/danielmiessler/packet#how-it-measures) for the reasoning.
+
+Packet records numbers about the path, never anything about your traffic. These are the only hosts
+it contacts: your gateway, `1.1.1.1`, `speed.cloudflare.com`, the 8 AWS endpoints, your DNS
+resolver, and (on `packet test`) Apple's `networkQuality` servers.
+
+## API (127.0.0.1 only)
+
+| | |
+|---|---|
+| `GET /` | history page |
+| `GET /v1/status` | latest round, verdict, per-layer rows (long and short text), bandwidth |
+| `GET /v1/history?range=1h\|24h\|7d\|30d` | bucketed history |
+| `POST /v1/test` | run a full test now |
+| `POST /v1/hourly?on=1\|0` | toggle the hourly test |
+| `GET /v1/health` | liveness |
+
+POSTs need an `X-Packet: 1` header, and every request needs a loopback `Host`. That blocks
+cross-site and DNS-rebinding requests from web pages.
+
+## Running the daemon
+
+Run it from a terminal, or from a **parent app** such as a menu bar app. Don't run it as a bare
+launchd agent: macOS Local Network privacy blocks such binaries from the LAN, so the router layer
+can't be pinged (a child of an app is allowed, and a terminal counts as an app). The Internet, DNS
+and World layers are unaffected either way.
+
 ## Layout
 
-Follows the usual Go project layout (`cmd/` for binaries, `internal/` for packages):
+The usual Go layout (`cmd/` for binaries, `internal/` for packages):
 
 ```
 cmd/packet/          the binary: CLI commands and the daemon entry point
@@ -33,51 +116,9 @@ internal/clock/      time helpers and the `packet at` parser
 internal/num/        helpers for optional numbers
 ```
 
-Dependencies point one way: `probe` knows nothing of `verdict`, `verdict` nothing of `store`, and
-so on up to `cmd/packet`. Tests sit beside the code; `internal/probe/probetest` has the shared
-fixture.
+Dependencies point one way: `probe` knows nothing of `verdict`, `verdict` nothing of `store`, up to
+`cmd/packet`. Tests sit beside the code; `internal/probe/probetest` has the shared fixture.
 
-CGO is used for two small Objective-C bridges (`native_darwin.m`): CoreWLAN for Wi-Fi signal, and
-Network.framework for expensive/constrained paths. Everything else is pure Go; SQLite is
-`modernc.org/sqlite`.
+## License
 
-## Use
-
-```
-packet daemon                   measure every minute and serve the local API (127.0.0.1)
-packet status [--json]          what the running daemon last measured
-packet now [--json]             measure every layer now
-packet test [--json]            measure now plus a full bandwidth test
-packet at <WHEN> [--json]       what the network was like then: 14:30, 2026-10-12 14:30, 30m, 2h, 3d
-packet history [--range R] [--json]
-packet hourly on|off            hourly line-speed test (about 3.4 GB/day, off by default)
-```
-
-Data lives in `~/Library/Application Support/Packet/packet.sqlite` (90 days); `PACKET_DATA_DIR`
-overrides it, and `PACKET_PORT` changes the API port.
-
-## API (127.0.0.1 only)
-
-| | |
-|---|---|
-| `GET /v1/status` | latest round, verdict, per-layer rows, bandwidth |
-| `GET /v1/history?range=1h\|24h\|7d\|30d` | bucketed history |
-| `POST /v1/test` | run Test Now |
-| `POST /v1/hourly?on=1\|0` | toggle the hourly test |
-| `GET /v1/health` | liveness |
-
-POSTs need an `X-Packet: 1` header and every request needs a loopback `Host`, which blocks
-cross-site and DNS-rebinding requests from web pages.
-
-## Running it
-
-Run the daemon from CLBar (it starts it for you), or from a terminal with `packet daemon`.
-Don't run it as a launchd agent: macOS Local Network privacy blocks bare launchd binaries from
-the LAN, so the router layer can't be pinged. A child of an app (CLBar) is allowed. The Internet,
-DNS and World layers are unaffected either way.
-
-## Differences from the original
-
-- No tray icon, window or login-item code; CLBar is the UI.
-- Bandwidth tests use Go's `net/http` instead of shelling out to `curl`.
-- `packet status` and the daemon API are new.
+[MIT](LICENSE). Copyright (c) 2026 Daniel Miessler (the original Packet) and Cristian Leonte (this port).

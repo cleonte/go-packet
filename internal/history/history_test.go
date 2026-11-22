@@ -4,11 +4,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cleonte/menubar/packet-go/internal/clock"
-	"github.com/cleonte/menubar/packet-go/internal/probe"
-	"github.com/cleonte/menubar/packet-go/internal/probe/probetest"
-	"github.com/cleonte/menubar/packet-go/internal/store"
-	"github.com/cleonte/menubar/packet-go/internal/verdict"
+	"github.com/cleonte/go-packet/internal/clock"
+	"github.com/cleonte/go-packet/internal/probe"
+	"github.com/cleonte/go-packet/internal/probe/probetest"
+	"github.com/cleonte/go-packet/internal/store"
+	"github.com/cleonte/go-packet/internal/verdict"
 )
 
 func TestBuildCountsRoundsAndBadOnes(t *testing.T) {

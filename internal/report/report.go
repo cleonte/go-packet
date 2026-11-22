@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cleonte/menubar/packet-go/internal/clock"
-	"github.com/cleonte/menubar/packet-go/internal/num"
-	"github.com/cleonte/menubar/packet-go/internal/probe"
-	"github.com/cleonte/menubar/packet-go/internal/sampler"
-	"github.com/cleonte/menubar/packet-go/internal/verdict"
+	"github.com/cleonte/go-packet/internal/clock"
+	"github.com/cleonte/go-packet/internal/num"
+	"github.com/cleonte/go-packet/internal/probe"
+	"github.com/cleonte/go-packet/internal/sampler"
+	"github.com/cleonte/go-packet/internal/verdict"
 )
 
 func lossStr(v *float64) string {
@@ -166,7 +166,7 @@ func SnapshotJSON(s sampler.Snapshot, now int64) map[string]any {
 	return out
 }
 
-// Short rows for narrow UIs (CLBar's dropdown). Loss is shown only when there is some.
+// Short rows for narrow UIs (menu bar dropdowns). Loss is shown only when there is some.
 
 func lossShort(v *float64) string {
 	if v == nil || *v < 0.005 {

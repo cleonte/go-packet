@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cleonte/menubar/packet-go/internal/num"
+	"github.com/cleonte/go-packet/internal/num"
 )
 
 const (
