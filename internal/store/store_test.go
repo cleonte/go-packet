@@ -43,3 +43,48 @@ func TestStoreRoundTripAndBaseline(t *testing.T) {
 		t.Fatal("no baseline without history")
 	}
 }
+
+func TestWriteDemoTellsAStory(t *testing.T) {
+	db, err := OpenAt(filepath.Join(t.TempDir(), "demo.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	end := clock.NowMs()
+	if err := WriteDemo(db, end); err != nil {
+		t.Fatal(err)
+	}
+	rounds, err := RoundsBetween(db, end-25*3_600_000, end+1)
+	if err != nil || len(rounds) != 1440 {
+		t.Fatalf("want 1440 rounds, got %d (%v)", len(rounds), err)
+	}
+	layers := map[verdict.Where]int{}
+	links := map[probe.LinkKind]bool{}
+	for _, s := range rounds {
+		if s.Verdict.Level >= verdict.Fair {
+			layers[s.Verdict.At]++
+		}
+		links[s.Round.Link] = true
+	}
+	for _, w := range []verdict.Where{verdict.WhereDns, verdict.WhereWiFi, verdict.WhereIsp} {
+		if layers[w] == 0 {
+			t.Errorf("the demo day should show trouble at %v, got %v", w, layers)
+		}
+	}
+	if !links[probe.LinkEthernet] || !links[probe.LinkWiFi] {
+		t.Error("the demo day should switch between Wi-Fi and Ethernet")
+	}
+	if full := LatestFull(db); full == nil {
+		t.Error("the demo day should have full speed tests")
+	}
+	// Same seed, same data: screenshots are reproducible.
+	db2, _ := OpenAt(filepath.Join(t.TempDir(), "demo2.sqlite"))
+	defer db2.Close()
+	if err := WriteDemo(db2, end); err != nil {
+		t.Fatal(err)
+	}
+	rounds2, _ := RoundsBetween(db2, end-25*3_600_000, end+1)
+	if *rounds[700].Round.Edge.Ms != *rounds2[700].Round.Edge.Ms {
+		t.Error("the demo data must be deterministic")
+	}
+}

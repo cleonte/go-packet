@@ -10,6 +10,10 @@ internet. When everything is green, stop blaming the Wi-Fi and go look at the ap
 > his copyright and licence; see [LICENSE](LICENSE)). Go to the original for the polished Mac app
 > with its own menu bar icon and history window. Thank you, Daniel.
 
+![The history page: a day with a DNS stall, a stretch on weak Wi-Fi, an hour of provider trouble and two Ethernet switches](docs/images/history.png)
+
+<sub>The screenshot is a made-up day (`packet demo`), not a real network.</sub>
+
 ## What's different here
 
 The original is a Rust app with a tray icon and a window. This port is a headless Go program:
@@ -52,6 +56,7 @@ packet at <WHEN> [--json]       what the network was like then: 14:30, 2026-10-1
 packet history [--range R] [--json]
 packet hourly on|off            hourly line-speed test (about 3.4 GB/day, off by default)
 packet version                  which build this is
+packet demo DIR                 write a made-up day of data into DIR (screenshots, UI work)
 ```
 
 Data lives in `~/Library/Application Support/Packet/packet.sqlite` (kept 90 days).
@@ -103,6 +108,17 @@ Run it from a terminal, or from a **parent app** such as a menu bar app. Don't r
 launchd agent: macOS Local Network privacy blocks such binaries from the LAN, so the router layer
 can't be pinged (a child of an app is allowed, and a terminal counts as an app). The Internet, DNS
 and World layers are unaffected either way.
+
+## Development
+
+```bash
+make test                                   # go vet + go test -race
+packet demo /tmp/demo                       # write a made-up day of data into a fresh directory
+PACKET_DATA_DIR=/tmp/demo PACKET_PORT=47999 packet daemon   # then open http://127.0.0.1:47999/
+```
+
+`packet demo` is seeded, so it produces the same day every time, and it refuses to write into your
+real data directory or over an existing database. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Layout
 

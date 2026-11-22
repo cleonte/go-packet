@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -40,6 +41,7 @@ USAGE
   packet history [--range R] [--json]
   packet hourly on|off            turn the hourly line-speed test on or off (about 3.4 GB/day)
   packet version                  which build this is
+  packet demo DIR                 write a made-up day of data into DIR (screenshots, UI work)
   packet help
 
 WHEN   14:30 · 2026-10-12 14:30 · 30m · 2h · 3d · epoch ms
@@ -133,6 +135,8 @@ func main() {
 		} else {
 			fmt.Println("hourly line-speed test:", rest[1])
 		}
+	case "demo":
+		code = cmdDemo(rest[1:])
 	case "version", "--version":
 		fmt.Println("packet", version.String())
 	case "help", "--help", "-h":
@@ -279,5 +283,44 @@ func cmdStatus(jsonOut bool) int {
 		fmt.Printf("  %s %v\n", marks[row["level"].(string)], row["text"])
 	}
 	fmt.Printf("  %v\n", v["line_speed_row"])
+	return 0
+}
+
+// cmdDemo writes a synthetic day into a fresh directory. It refuses the real data directory and
+// any directory that already holds a database, so it can never touch your history.
+func cmdDemo(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "demo needs a directory: packet demo DIR")
+		return 2
+	}
+	dir, err := filepath.Abs(args[0])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "packet:", err)
+		return 2
+	}
+	if real, _ := filepath.Abs(store.DataDir()); dir == real {
+		fmt.Fprintln(os.Stderr, "packet: refusing to write demo data into the real data directory")
+		return 2
+	}
+	path := filepath.Join(dir, "packet.sqlite")
+	if _, err := os.Stat(path); err == nil {
+		fmt.Fprintln(os.Stderr, "packet: refusing to overwrite", path)
+		return 2
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		fmt.Fprintln(os.Stderr, "packet:", err)
+		return 1
+	}
+	db, err := store.OpenAt(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "packet:", err)
+		return 1
+	}
+	defer db.Close()
+	if err := store.WriteDemo(db, clock.NowMs()); err != nil {
+		fmt.Fprintln(os.Stderr, "packet:", err)
+		return 1
+	}
+	fmt.Printf("wrote a made-up day to %s\nview it with:\n  PACKET_DATA_DIR=%s PACKET_PORT=47999 packet daemon\n  open http://127.0.0.1:47999/\n", path, dir)
 	return 0
 }
