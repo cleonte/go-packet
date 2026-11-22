@@ -319,3 +319,21 @@ func TestStepFlow(t *testing.T) {
 		t.Fatal("manual test stored", manual)
 	}
 }
+
+func TestShortRowsStayShort(t *testing.T) {
+	r := healthy()
+	r.Link, r.WiFi = LinkWiFi, &WiFi{Rssi: -52, Noise: -94, TxMbps: 400, Channel: 36, Band: 2}
+	rows := []string{linkShort(r), edgeShort(r), dnsShort(r), worldShort(r), speedShort(&Bandwidth{AtMs: nowMs(), DownMbps: fp(77), UpMbps: fp(60), Rpm: fp(136)}, nowMs())}
+	for _, s := range rows {
+		if n := len([]rune(s)); n > 52 {
+			t.Errorf("short row too long (%d): %q", n, s)
+		}
+	}
+	if linkShort(r) != "Wi-Fi -52 dBm · 5 GHz · router 0.6 ms" {
+		t.Errorf("got %q", linkShort(r))
+	}
+	r.Gateway.Loss = fp(0.2)
+	if got := linkShort(r); got != "Wi-Fi -52 dBm · 5 GHz · router 0.6 ms · 20% loss" {
+		t.Errorf("loss shown only when present: %q", got)
+	}
+}

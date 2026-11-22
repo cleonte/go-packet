@@ -147,15 +147,83 @@ func snapshotJSON(s Snapshot, now int64) map[string]any {
 	out := s.Round.JSON(s.Verdict)
 	out["layers"] = findingsJSON(s.Findings)
 	out["rows"] = []map[string]any{
-		{"layer": "link", "level": s.Findings[0].Level.Slug(), "text": linkRow(s.Round)},
-		{"layer": "internet", "level": s.Findings[1].Level.Slug(), "text": edgeRow(s.Round)},
-		{"layer": "dns", "level": s.Findings[2].Level.Slug(), "text": dnsRow(s.Round)},
-		{"layer": "world", "level": s.Findings[3].Level.Slug(), "text": worldRow(s.Round), "detail": regionLine(s.Round)},
+		{"layer": "link", "level": s.Findings[0].Level.Slug(), "text": linkRow(s.Round), "short": linkShort(s.Round)},
+		{"layer": "internet", "level": s.Findings[1].Level.Slug(), "text": edgeRow(s.Round), "short": edgeShort(s.Round)},
+		{"layer": "dns", "level": s.Findings[2].Level.Slug(), "text": dnsRow(s.Round), "short": dnsShort(s.Round)},
+		{"layer": "world", "level": s.Findings[3].Level.Slug(), "text": worldRow(s.Round), "short": worldShort(s.Round), "detail": regionLine(s.Round)},
 	}
 	out["bandwidth"] = bwJSON(s.Full)
 	out["line_speed_row"] = lineSpeedRow(s.Full, now)
+	out["line_speed_short"] = speedShort(s.Full, now)
 	out["quick"] = bwJSON(s.Quick)
 	out["quick_row"] = quickRow(s.Quick, s.QuickShare, now)
 	out["testing"] = s.Testing
 	return out
+}
+
+// Short rows for narrow UIs (CLBar's dropdown). Loss is shown only when there is some.
+
+func lossShort(v *float64) string {
+	if v == nil || *v < 0.005 {
+		return ""
+	}
+	return fmt.Sprintf(" · %.0f%% loss", *v*100)
+}
+
+func linkShort(r *Round) string {
+	router := ""
+	switch {
+	case r.Gateway.Ms != nil:
+		router = fmt.Sprintf(" · router %s%s", fmtMs(*r.Gateway.Ms), lossShort(r.Gateway.Loss))
+	case r.GatewayKnown:
+		router = " · router silent"
+	}
+	switch {
+	case r.Link == LinkWiFi && r.WiFi != nil:
+		band := ""
+		if l := r.WiFi.BandLabel(); l != "" {
+			band = " · " + l
+		}
+		return fmt.Sprintf("Wi-Fi %d dBm%s%s", r.WiFi.Rssi, band, router)
+	case r.Link == LinkNone:
+		return "No network connection"
+	}
+	return r.Link.Label() + router
+}
+
+func edgeShort(r *Round) string {
+	if r.Edge.Ms == nil {
+		return "Cloudflare unreachable"
+	}
+	colo := ""
+	if r.Colo != "" {
+		colo = " " + r.Colo
+	}
+	return fmt.Sprintf("Cloudflare%s %s%s", colo, fmtMs(*r.Edge.Ms), lossShort(r.Edge.Loss))
+}
+
+func dnsShort(r *Round) string {
+	if r.DnsMs == nil {
+		return "DNS failing"
+	}
+	return "DNS " + fmtMs(*r.DnsMs)
+}
+
+func worldShort(r *Round) string {
+	m := r.FarMedian()
+	if m == nil {
+		return "World · none reachable"
+	}
+	return fmt.Sprintf("World %d/%d regions · median %s", r.RegionsUp(), len(Regions), fmtMs(*m))
+}
+
+func speedShort(b *Bandwidth, now int64) string {
+	if b == nil {
+		return "Speed not measured · use Test Now"
+	}
+	rpm := ""
+	if b.Rpm != nil {
+		rpm = fmt.Sprintf(" · %s (%.0f RPM)", rpmLabel(*b.Rpm), *b.Rpm)
+	}
+	return fmt.Sprintf("⬇ %s ⬆ %s Mbps%s · %s", mbps(b.DownMbps), mbps(b.UpMbps), rpm, ago(now, b.AtMs))
 }
