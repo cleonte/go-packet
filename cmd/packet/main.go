@@ -25,6 +25,7 @@ import (
 	"github.com/cleonte/go-packet/internal/server"
 	"github.com/cleonte/go-packet/internal/store"
 	"github.com/cleonte/go-packet/internal/verdict"
+	"github.com/cleonte/go-packet/internal/version"
 )
 
 const help = `packet — is it the network?
@@ -37,6 +38,7 @@ USAGE
   packet at <WHEN> [--json]       what the network was like at a past moment
   packet history [--range R] [--json]
   packet hourly on|off            turn the hourly line-speed test on or off (about 3.4 GB/day)
+  packet version                  which build this is
   packet help
 
 WHEN   14:30 · 2026-10-12 14:30 · 30m · 2h · 3d · epoch ms
@@ -109,6 +111,8 @@ func main() {
 		} else {
 			fmt.Println("hourly line-speed test:", rest[1])
 		}
+	case "version", "--version":
+		fmt.Println("packet", version.String())
 	case "help", "--help", "-h":
 		fmt.Println(help)
 	default:

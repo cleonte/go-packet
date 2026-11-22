@@ -7,7 +7,7 @@
 //	GET  /v1/history?range=24h bucketed history
 //	POST /v1/hourly?on=1|0     turn the hourly line-speed test on or off (needs X-Packet: 1)
 //	POST /v1/test              run Test Now (needs header X-Packet: 1)
-//	GET  /v1/health            liveness
+//	GET  /v1/health            liveness and the running version
 //
 // Writes need a custom header, which a web page cannot send cross-origin without a preflight we
 // never answer, and the Host header must be loopback, which defeats DNS rebinding.
@@ -30,6 +30,7 @@ import (
 	"github.com/cleonte/go-packet/internal/report"
 	"github.com/cleonte/go-packet/internal/sampler"
 	"github.com/cleonte/go-packet/internal/store"
+	"github.com/cleonte/go-packet/internal/version"
 )
 
 const defaultPort = "47831"
@@ -77,7 +78,7 @@ func loopbackHost(r *http.Request) bool {
 func (s *Server) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"ok": true})
+		writeJSON(w, 200, map[string]any{"ok": true, "version": version.String()})
 	})
 	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.RLock()

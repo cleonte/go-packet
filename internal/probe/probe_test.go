@@ -3,6 +3,7 @@ package probe
 import (
 	"net"
 	"testing"
+	"time"
 )
 
 func TestParseRouteAndClassify(t *testing.T) {
@@ -95,5 +96,56 @@ func TestAggregateMbps(t *testing.T) {
 	}
 	if aggregateMbps(nil) != nil {
 		t.Fatal("no streams")
+	}
+}
+
+func TestPingLoopback(t *testing.T) {
+	st := ping(net.IPv4(127, 0, 0, 1), 3, 20*time.Millisecond, time.Second)
+	if st.Sent == 0 {
+		t.Skip("no unprivileged ICMP socket here")
+	}
+	if len(st.Rtts) == 0 {
+		// macOS does not deliver loopback echo replies to unprivileged ICMP sockets, and CI
+		// runners may block ICMP. Request/reply matching is covered by TestICMPRoundTrip.
+		t.Skip("no loopback ICMP replies on this host")
+	}
+	if len(st.Rtts) != 3 {
+		t.Fatalf("loopback must answer every ping, got %d of %d", len(st.Rtts), st.Sent)
+	}
+	if l := st.Loss(); l == nil || *l != 0 {
+		t.Fatalf("loss = %v", l)
+	}
+	for _, r := range st.Rtts {
+		if r <= 0 || r > 500 {
+			t.Fatalf("implausible rtt %v", r)
+		}
+	}
+	if ping(net.ParseIP("::1"), 1, 0, time.Second).Sent != 0 {
+		t.Fatal("IPv6 targets are not measured")
+	}
+}
+
+func TestConnectAddrMs(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("no loopback listener")
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	port := ln.Addr().(*net.TCPAddr).Port
+	if ms := connectAddrMs(net.IPv4(127, 0, 0, 1), port, 2, time.Second); ms == nil || *ms <= 0 {
+		t.Fatalf("handshake to a live listener: %v", ms)
+	}
+	ln.Close()
+	if ms := connectAddrMs(net.IPv4(127, 0, 0, 1), port, 1, 200*time.Millisecond); ms != nil {
+		t.Fatalf("a closed port must read as unreachable, got %v", *ms)
 	}
 }

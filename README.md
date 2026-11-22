@@ -51,6 +51,7 @@ packet test [--json]            measure now plus a full bandwidth test
 packet at <WHEN> [--json]       what the network was like then: 14:30, 2026-10-12 14:30, 30m, 2h, 3d
 packet history [--range R] [--json]
 packet hourly on|off            hourly line-speed test (about 3.4 GB/day, off by default)
+packet version                  which build this is
 ```
 
 Data lives in `~/Library/Application Support/Packet/packet.sqlite` (kept 90 days).
@@ -87,7 +88,7 @@ resolver, and (on `packet test`) Apple's `networkQuality` servers.
 | `GET /v1/history?range=1h\|24h\|7d\|30d` | bucketed history |
 | `POST /v1/test` | run a full test now |
 | `POST /v1/hourly?on=1\|0` | toggle the hourly test |
-| `GET /v1/health` | liveness |
+| `GET /v1/health` | liveness and the running version |
 
 POSTs need an `X-Packet: 1` header, and every request needs a loopback `Host`. That blocks
 cross-site and DNS-rebinding requests from web pages.
@@ -118,6 +119,10 @@ internal/num/        helpers for optional numbers
 
 Dependencies point one way: `probe` knows nothing of `verdict`, `verdict` nothing of `store`, up to
 `cmd/packet`. Tests sit beside the code; `internal/probe/probetest` has the shared fixture.
+
+## Security
+
+See [SECURITY.md](SECURITY.md). The API is localhost-only; please report problems privately.
 
 ## License
 
