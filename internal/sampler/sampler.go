@@ -123,7 +123,8 @@ func step(db *sql.DB, st *State, manual, retryBad bool,
 		due, isDue = probe.TrigManual, true
 	} else {
 		due, isDue = bandwidthDue(now, maxTime(atOf(st.lastQuick), atOf(st.lastFull), st.triedAny),
-			maxTime(atOf(st.lastFull), st.triedFull), v.Level, prevLevel, round.Expensive, HourlyEnabled())
+			maxTime(atOf(st.lastFull), st.triedFull), v.Level, prevLevel,
+			round.Expensive || !currentPolicy().backgroundBandwidth, HourlyEnabled())
 	}
 	snap := Snapshot{Round: round, Verdict: v, Findings: fs, Full: st.lastFull, Quick: st.lastQuick,
 		QuickShare: share(st.lastQuick, st.baseline), Testing: isDue}
@@ -154,8 +155,6 @@ func step(db *sql.DB, st *State, manual, retryBad bool,
 }
 
 const (
-	// A gap this long between rounds means the Mac slept (or stalled): a round is 60 s apart.
-	wakeGapMs = 2*roundEveryMs + 30_000
 	// How long to wait for a default route to come back after a wake or change.
 	linkWait = 30 * time.Second
 )
@@ -179,8 +178,9 @@ var (
 
 // IsWake reports whether the time since the last round shows the Mac was asleep. Wall-clock
 // milliseconds are compared: Go's monotonic clock does not advance during sleep on macOS.
-func IsWake(lastRoundMs, nowMs int64) bool {
-	return lastRoundMs > 0 && nowMs-lastRoundMs > wakeGapMs
+func IsWake(lastRoundMs, nowMs int64, every time.Duration) bool {
+	// A gap of more than two rounds plus 30 s means the Mac slept (or stalled).
+	return lastRoundMs > 0 && nowMs-lastRoundMs > 2*every.Milliseconds()+30_000
 }
 
 // watchPath signals kick whenever generation() changes, polling every poll.
@@ -218,7 +218,7 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // or a change of network path runs a round early (after waiting for the link to return).
 func Run(ctx context.Context, db *sql.DB, testNow <-chan struct{}, notify func(Snapshot)) {
 	st := loadState(db, clock.NowMs())
-	every := time.Duration(roundEveryMs) * time.Millisecond
+	every := currentPolicy().roundEvery
 	next := time.Now()
 	var lastRound int64
 	kick := make(chan struct{}, 1)
@@ -246,7 +246,7 @@ func Run(ctx context.Context, db *sql.DB, testNow <-chan struct{}, notify func(S
 			slog.Info("network path changed; measuring now")
 			afterChange = true
 		case <-time.After(time.Until(next)):
-			afterChange = IsWake(lastRound, clock.NowMs())
+			afterChange = IsWake(lastRound, clock.NowMs(), every)
 			if afterChange {
 				slog.Info("woke from sleep; waiting for the link, then measuring",
 					"gap_s", (clock.NowMs()-lastRound)/1000)
@@ -255,6 +255,7 @@ func Run(ctx context.Context, db *sql.DB, testNow <-chan struct{}, notify func(S
 		if afterChange {
 			waitForLink(ctx, linkWait)
 		}
+		every = currentPolicy().roundEvery
 		if !manual {
 			next = time.Now().Add(every)
 		}

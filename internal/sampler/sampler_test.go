@@ -109,14 +109,19 @@ func TestStepFlow(t *testing.T) {
 
 func TestIsWake(t *testing.T) {
 	const m = 60_000
-	if IsWake(0, 10*m) {
+	every := time.Minute
+	if IsWake(0, 10*m, every) {
 		t.Fatal("no previous round is not a wake")
 	}
-	if IsWake(10*m, 11*m) || IsWake(10*m, 12*m) {
+	if IsWake(10*m, 11*m, every) || IsWake(10*m, 12*m, every) {
 		t.Fatal("an ordinary or one-missed round is not a wake")
 	}
-	if !IsWake(10*m, 10*m+wakeGapMs+1) {
+	if !IsWake(10*m, 10*m+2*m+30_000+1, every) {
 		t.Fatal("a long gap is a wake")
+	}
+	// In Low Power Mode rounds are two minutes apart; two missed rounds are not a wake.
+	if IsWake(10*m, 14*m, 2*every) || !IsWake(10*m, 14*m+30_001, 2*every) {
+		t.Fatal("the wake gap scales with the round interval")
 	}
 }
 
@@ -310,5 +315,63 @@ func TestRunMeasuresEarlyWhenThePathChanges(t *testing.T) {
 	l.waitRounds(t, 2)
 	if l.retried.Load() == 0 {
 		t.Fatal("a round after a network change waits for the link first")
+	}
+}
+
+func TestPowerPolicy(t *testing.T) {
+	min := time.Minute
+	cases := []struct {
+		name   string
+		p      probe.Power
+		always bool
+		bw     bool
+		every  time.Duration
+	}{
+		{"on AC", probe.Power{}, false, true, min},
+		{"on battery", probe.Power{OnBattery: true}, false, false, min},
+		{"low power mode on AC", probe.Power{LowPower: true}, false, false, 2 * min},
+		{"low power mode on battery", probe.Power{OnBattery: true, LowPower: true}, false, false, 2 * min},
+		{"policy turned off", probe.Power{OnBattery: true, LowPower: true}, true, true, min},
+	}
+	for _, c := range cases {
+		got := policyFor(c.p, c.always)
+		if got.backgroundBandwidth != c.bw || got.roundEvery != c.every {
+			t.Errorf("%s: got %+v, want bandwidth=%v every=%v", c.name, got, c.bw, c.every)
+		}
+	}
+}
+
+func TestBatteryPausesBackgroundBandwidthButNotTestNow(t *testing.T) {
+	old := powerState
+	powerState = func() probe.Power { return probe.Power{OnBattery: true} }
+	lastPolicy = nil
+	defer func() { powerState, lastPolicy = old, nil }()
+
+	db, _ := store.OpenAt(filepath.Join(t.TempDir(), "b.sqlite"))
+	defer db.Close()
+	st := loadState(db, clock.NowMs()) // no earlier tests: on AC a quick check would be due at once
+	var ran []probe.Trigger
+	bw := func(tr probe.Trigger, at int64) probe.Bandwidth {
+		ran = append(ran, tr)
+		return probe.Bandwidth{AtMs: at, Trigger: tr, DownMbps: num.Ptr(100)}
+	}
+	measure := func(at int64, _ uint64) *probe.Round { r := probetest.Healthy(); r.AtMs = at; return r }
+	step(db, st, false, false, measure, bw, func(Snapshot) {})
+	if len(ran) != 0 {
+		t.Fatalf("on battery no background test may run, ran %v", ran)
+	}
+	time.Sleep(5 * time.Millisecond)
+	step(db, st, true, false, measure, bw, func(Snapshot) {})
+	if len(ran) != 1 || ran[0] != probe.TrigManual {
+		t.Fatalf("Test Now must still run on battery, ran %v", ran)
+	}
+	// Back on AC the scheduled check comes due again.
+	powerState = func() probe.Power { return probe.Power{} }
+	st.triedAny, st.triedFull, st.lastQuick, st.lastFull = nil, nil, nil, nil
+	time.Sleep(5 * time.Millisecond)
+	ran = nil
+	step(db, st, false, false, measure, bw, func(Snapshot) {})
+	if len(ran) != 1 {
+		t.Fatalf("on AC a background test is due again, ran %v", ran)
 	}
 }

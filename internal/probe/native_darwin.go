@@ -2,7 +2,7 @@ package probe
 
 /*
 #cgo CFLAGS: -fobjc-arc
-#cgo LDFLAGS: -framework Foundation -framework CoreWLAN -framework Network
+#cgo LDFLAGS: -framework Foundation -framework CoreWLAN -framework Network -framework IOKit
 #include <stdlib.h>
 #include "native_darwin.h"
 */
@@ -49,4 +49,15 @@ func PathStart() { C.packet_path_start() }
 func PathGeneration() int {
 	C.packet_path_start()
 	return int(C.packet_path_generation())
+}
+
+// Power is the machine's power situation: background work should back off when either is set.
+type Power struct {
+	OnBattery bool // running on battery (false when on AC or unknown)
+	LowPower  bool // Low Power Mode is on
+}
+
+// PowerState reads the current power source and Low Power Mode.
+func PowerState() Power {
+	return Power{OnBattery: C.packet_on_battery() == 1, LowPower: C.packet_low_power_mode() == 1}
 }

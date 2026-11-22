@@ -7,4 +7,7 @@ void packet_path_start(void);
 int packet_path_state(int *expensive, int *constrained);
 // Number of path updates seen so far; changes when the interface, Wi-Fi network or route changes.
 int packet_path_generation(void);
+// Power: on_battery is 1 on battery power, 0 on AC, -1 if unknown. low_power is 1 in Low Power Mode.
+int packet_on_battery(void);
+int packet_low_power_mode(void);
 #endif

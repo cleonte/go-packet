@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #import <CoreWLAN/CoreWLAN.h>
 #import <Network/Network.h>
+#import <IOKit/ps/IOPowerSources.h>
 #include <stdatomic.h>
 #include "native_darwin.h"
 
@@ -49,4 +50,18 @@ int packet_path_state(int *expensive, int *constrained) {
 
 int packet_path_generation(void) {
     return atomic_load(&g_generation);
+}
+
+int packet_on_battery(void) {
+    CFTypeRef blob = IOPSCopyPowerSourcesInfo();
+    if (!blob) return -1;
+    CFStringRef type = IOPSGetProvidingPowerSourceType(blob);
+    int r = -1;
+    if (type) r = CFEqual(type, CFSTR("Battery Power")) ? 1 : 0;
+    CFRelease(blob);
+    return r;
+}
+
+int packet_low_power_mode(void) {
+    return [[NSProcessInfo processInfo] isLowPowerModeEnabled] ? 1 : 0;
 }

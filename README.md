@@ -66,6 +66,20 @@ Logs go to stderr. `PACKET_LOG=debug|info|warn|error` sets the level (default `i
 daemon, `warn` for one-shot commands). `debug` logs every round; `info` logs verdict changes, wakes
 from sleep, network changes and bandwidth tests.
 
+## Battery and resource use
+
+On a Mac, measured over several minutes including a bandwidth check: about **0.1% of one core**,
+**11 to 16 MB** of memory, and under one idle wakeup per second. The macOS energy figure for the
+process is effectively zero. (One M-series MacBook; your numbers will differ a little.)
+
+What does cost battery is the Wi-Fi radio: a quick bandwidth check moves about 14 MB every 10
+minutes. So the daemon backs off when power matters:
+
+- **On battery:** scheduled and bad-round bandwidth checks pause. Latency rounds (a few small
+  packets a minute) continue, and Test Now still works.
+- **Low Power Mode:** the same, and rounds run every two minutes instead of every minute.
+- Back on AC, it resumes by itself. `PACKET_POWER=always` turns the policy off.
+
 ## How it measures
 
 Every 60 seconds, one round:
