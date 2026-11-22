@@ -1,9 +1,12 @@
 package sampler
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -181,5 +184,25 @@ func TestWatchPathKicksOnChange(t *testing.T) {
 	time.Sleep(40 * time.Millisecond)
 	if len(kick) != 1 {
 		t.Fatalf("pending kicks = %d, want 1", len(kick))
+	}
+}
+
+func TestVerdictChangesAreLogged(t *testing.T) {
+	var buf bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer slog.SetDefault(old)
+
+	db, _ := store.OpenAt(filepath.Join(t.TempDir(), "l.sqlite"))
+	defer db.Close()
+	st := loadState(db, clock.NowMs())
+	st.prevSettled = verdict.Good
+	noBW := func(probe.Trigger, int64) probe.Bandwidth { return probe.Bandwidth{} }
+	step(db, st, false, false, func(at int64, _ uint64) *probe.Round { return &probe.Round{AtMs: at, Link: probe.LinkNone} }, noBW, func(Snapshot) {})
+	out := buf.String()
+	for _, want := range []string{"level=DEBUG", `msg=round`, `msg="verdict changed"`, "from=good", "to=offline"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log is missing %q:\n%s", want, out)
+		}
 	}
 }

@@ -57,6 +57,10 @@ packet version                  which build this is
 Data lives in `~/Library/Application Support/Packet/packet.sqlite` (kept 90 days).
 `PACKET_DATA_DIR` overrides it and `PACKET_PORT` changes the API port.
 
+Logs go to stderr. `PACKET_LOG=debug|info|warn|error` sets the level (default `info` for the
+daemon, `warn` for one-shot commands). `debug` logs every round; `info` logs verdict changes, wakes
+from sleep, network changes and bandwidth tests.
+
 ## How it measures
 
 Every 60 seconds, one round:

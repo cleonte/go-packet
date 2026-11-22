@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -47,6 +48,26 @@ RANGE  1h · 24h (default) · 7d · 30d
 EXIT
   0 ok · 1 no data for that time · 2 bad arguments`
 
+// setupLogging sends logs to stderr. PACKET_LOG (debug, info, warn, error) sets the level; the
+// default is info for the daemon and warn for one-shot commands, so their output stays clean.
+func setupLogging(daemon bool) {
+	level := slog.LevelWarn
+	if daemon {
+		level = slog.LevelInfo
+	}
+	switch strings.ToLower(os.Getenv("PACKET_LOG")) {
+	case "debug":
+		level = slog.LevelDebug
+	case "info":
+		level = slog.LevelInfo
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+}
+
 func main() {
 	var rest []string
 	jsonOut := false
@@ -63,6 +84,7 @@ func main() {
 		fmt.Println(help)
 		return
 	}
+	setupLogging(rest[0] == "daemon")
 	code := 0
 	switch rest[0] {
 	case "daemon":

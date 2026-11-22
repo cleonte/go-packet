@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -110,6 +111,7 @@ func (s *Server) handler() http.Handler {
 		}
 		h, err := history.Build(s.db, rng, clock.NowMs())
 		if err != nil {
+			slog.Warn("history unavailable", "range", rng, "err", err)
 			writeJSON(w, 500, map[string]any{"error": "history unavailable"})
 			return
 		}
@@ -138,6 +140,7 @@ func (s *Server) handler() http.Handler {
 			return
 		}
 		if err := sampler.SetHourly(on == "1"); err != nil {
+			slog.Warn("could not change the hourly setting", "err", err)
 			writeJSON(w, 500, map[string]any{"error": "could not change the setting"})
 			return
 		}
@@ -166,8 +169,10 @@ func Run(ctx context.Context) error {
 	}
 	srv := &http.Server{Handler: s.handler(), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = srv.Serve(ln) }()
+	slog.Info("packet daemon started", "version", version.String(), "addr", ln.Addr().String(), "data", store.DataDir())
 	probe.PathStart()
 	sampler.Run(ctx, db, s.testNow, s.notify)
+	slog.Info("packet daemon stopping")
 	shutdown, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdown)

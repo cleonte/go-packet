@@ -5,9 +5,11 @@ package sampler
 import (
 	"context"
 	"database/sql"
+	"log/slog"
 	"time"
 
 	"github.com/cleonte/go-packet/internal/clock"
+	"github.com/cleonte/go-packet/internal/num"
 	"github.com/cleonte/go-packet/internal/probe"
 	"github.com/cleonte/go-packet/internal/store"
 	"github.com/cleonte/go-packet/internal/verdict"
@@ -91,6 +93,8 @@ func step(db *sql.DB, st *State, manual, retryBad bool,
 	st.seq++
 	recent := store.RecentScheduledDown(db, now)
 	if retryBad && verdict.Judge(round, st.baseline, recent).Level != verdict.Good {
+		slog.Info("round looked bad right after a wake or network change; measuring again",
+			"link", round.Link.Slug(), "delay", retryDelay)
 		time.Sleep(retryDelay)
 		now = clock.NowMs()
 		round = measure(now, st.seq)
@@ -101,9 +105,17 @@ func step(db *sql.DB, st *State, manual, retryBad bool,
 	prevLevel := st.prevSettled
 	v := verdict.Settle(raw, st.prevRaw)
 	st.prevRaw, st.prevSettled = &raw, v.Level
-	if store.InsertRound(db, round, v) != nil {
+	slog.Debug("round", "link", round.Link.Slug(), "gateway_ms", num.Round1(round.Gateway.Ms),
+		"edge_ms", num.Round1(round.Edge.Ms), "dns_ms", num.Round1(round.DnsMs), "regions_up", round.RegionsUp(),
+		"raw", raw.Level.Slug(), "settled", v.Level.Slug())
+	if v.Level != prevLevel {
+		slog.Info("verdict changed", "from", prevLevel.Slug(), "to", v.Level.Slug(), "layer", v.At.Slug(), "sentence", v.Sentence)
+	}
+	if err := store.InsertRound(db, round, v); err != nil {
 		time.Sleep(250 * time.Millisecond)
-		_ = store.InsertRound(db, round, v)
+		if err = store.InsertRound(db, round, v); err != nil {
+			slog.Warn("could not store the round", "err", err)
+		}
 	}
 	var due probe.Trigger
 	var isDue bool
@@ -124,7 +136,11 @@ func step(db *sql.DB, st *State, manual, retryBad bool,
 	if due.IsFull() {
 		st.triedFull = &bw.AtMs
 	}
-	_ = store.InsertBandwidth(db, bw)
+	if err := store.InsertBandwidth(db, bw); err != nil {
+		slog.Warn("could not store the bandwidth test", "err", err)
+	}
+	slog.Info("bandwidth test", "trigger", bw.Trigger.Slug(), "down_mbps", num.Round1(bw.DownMbps),
+		"up_mbps", num.Round1(bw.UpMbps), "measured", bw.Measured())
 	if bw.Measured() {
 		if bw.Trigger.IsFull() {
 			st.lastFull, snap.Full = &bw, &bw
@@ -205,6 +221,7 @@ func Run(ctx context.Context, db *sql.DB, testNow <-chan struct{}, notify func(S
 		case <-ctx.Done():
 			return
 		case <-testNow:
+			slog.Info("Test Now requested")
 			manual = true
 		case <-kick:
 			if !sleepCtx(ctx, pathDebounce) {
@@ -215,11 +232,17 @@ func Run(ctx context.Context, db *sql.DB, testNow <-chan struct{}, notify func(S
 			default:
 			}
 			if clock.NowMs()-lastRound < pathMinGapMs {
+				slog.Debug("network path changed; too soon after the last round, waiting for the schedule")
 				continue
 			}
+			slog.Info("network path changed; measuring now")
 			afterChange = true
 		case <-time.After(time.Until(next)):
 			afterChange = IsWake(lastRound, clock.NowMs())
+			if afterChange {
+				slog.Info("woke from sleep; waiting for the link, then measuring",
+					"gap_s", (clock.NowMs()-lastRound)/1000)
+			}
 		}
 		if afterChange {
 			probe.WaitForLink(ctx, linkWait)
